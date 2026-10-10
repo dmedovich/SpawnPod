@@ -32,7 +32,7 @@ cp -R docs "$release_stage/"
 mkdir -p "$release_stage/deploy" "$release_stage/third-party"
 cp deploy/security.yaml deploy/network-default-deny.yaml deploy/config.example.yaml "$release_stage/deploy/"
 cp -R deploy/release "$release_stage/deploy/"
-cp "$(go env GOROOT)/LICENSE" "$release_stage/third-party/Go-LICENSE"
+install -m 0644 "$(go env GOROOT)/LICENSE" "$release_stage/third-party/Go-LICENSE"
 cp internal/adapter/forgejo/proto/LICENSE "$release_stage/third-party/forgejo-plugin-LICENSE"
 go list -m -json all > "$release_root/modules.json"
 python3 - "$release_root" "$release_stage" "$release_version" "$release_revision" "$release_dirty" <<'PY'
@@ -48,7 +48,10 @@ for m in modules:
     licenses=[p for p in directory.iterdir() if p.is_file() and p.name.lower().startswith(('license','copying','notice'))] if directory.is_dir() else []
     if not m.get('Main'):
         target=stage/'third-party'/m['Path'].replace('/','_');target.mkdir(exist_ok=True)
-        for license_file in licenses: shutil.copy2(license_file,target/license_file.name)
+        for license_file in licenses:
+            pending=target/(license_file.name+'.tmp')
+            shutil.copyfile(license_file,pending);pending.chmod(0o644)
+            pending.replace(target/license_file.name)
         item['license_files']=[p.name for p in licenses]
     inventory.append(item)
 (stage/'dependencies.json').write_text(json.dumps(inventory,indent=2)+'\n')
