@@ -1,0 +1,21 @@
+# ADR-0004 — Workload topology and compatibility envelope
+
+**Status:** Accepted (design direction) · **Date:** 2026-10-07
+
+## Decision
+
+- Each environment has one job Pod and one `emptyDir` workspace mounted at fixed paths: `/workspace`, `/tmp/spawnpod`, `/opt/spawnpod/tools`. Sequential commands reuse the job container. The init container installs the supervisor before the job container starts. `Start` waits for the supervisor and required services to pass readiness; it returns image environment metadata available from the running container, subject to an integration test against Forgejo.
+- Each service is a **separate Pod** plus a ClusterIP Service in `ci`, with immutable environment ownership labels. The job Pod gets a generated `/etc/hosts` alias for each validated service name pointing to that Service IP. This allows workflow service names without a namespace per job and avoids port collisions between services. Service readiness uses TCP or configured health checks, not mere Pod `Running`. A failed required service fails the environment. Services have no implicit workspace mount or Kubernetes credentials. Service images follow the same digest, architecture and non-root approval rules as job images.
+- Only explicit container ports are supported for services. The adapter validates Forgejo's `host:container` port syntax and maps the container port to the Service. Dynamic host-port publishing, Docker bridge aliases beyond the service name, container-to-container localhost semantics, privileged services and undeclared ports are rejected with a clear unsupported-feature error. Service DNS/port behavior is part of Forgejo end-to-end tests before claiming compatibility.
+- Workspaces use disk-backed `emptyDir` initially. A profile sets `emptyDir.sizeLimit`, Pod ephemeral-storage request/limit and a maximum transfer size; kubelet eviction and disk pressure still remain possible. PVC workspaces are a future, separate profile type requiring storage-class and cleanup tests, never selected implicitly. No cross-environment cache or artifact volume is mounted by default.
+- Job images are administrator allowlisted by digest and architecture, with an administrator-assigned numeric UID/GID. The job runs as that non-root UID; `Exec.user` is allowed only if it resolves to the configured identity, otherwise rejected. Arbitrary user switching is unsupported. The original image entrypoint is ignored; the image must provide any shell/tools the workflow invokes. An image requiring root, PID 1 behavior, an unwriteable workspace for that UID, or unavailable architecture is incompatible and rejected before Pod creation where metadata permits, otherwise at readiness with a precise error.
+- Rootless image builds use an explicitly approved builder image/profile and scoped registry credentials. Docker daemon access, privileged DinD and host socket mounts are unsupported. Publishing is a command's responsibility; spawnPod does not implement OCI building.
+- `CopyIn`/`CopyOut` are tar streams rooted under the workspace. Extraction uses directory file descriptors with no symlink following, rejects absolute paths, `..`, hard links and special files, and caps entry count, per-entry size and total bytes. File permissions are masked; ownership is set to the profile UID/GID. CopyOut refuses escapes through symlinks. Atomic staging/rename is used for inbound files where possible; incomplete transfer yields an error and a cleanup of staged files.
+
+## Alternatives
+
+All services as sidecars would share the Pod network namespace and collide on ports. A namespace per environment would require cluster-scoped namespace creation and more complex cleanup. Arbitrary image/user support would require privilege or an incompatible security profile.
+
+## Consequences
+
+This is a deliberately narrower compatibility envelope than Docker. The adapter must reject unsupported Forgejo options (including `cap_add` and unsafe mounts), not silently ignore them. Test the `/etc/hosts` alias with the actual K3s DNS and NetworkPolicy implementation. Image environment and entrypoint behavior must be checked against pinned Forgejo Runner releases. See [ADR-0005](0005-security-and-network.md) for admission and network controls.

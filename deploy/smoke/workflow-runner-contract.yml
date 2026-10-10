@@ -1,0 +1,25 @@
+name: SpawnPod Runner contract
+on: workflow_dispatch
+jobs:
+  runner-contract:
+    runs-on: spawnpod
+    timeout-minutes: 10
+    container:
+      image: docker.io/library/alpine@sha256:3e9b4b680bfc9fb5269227cffbd6d42be39fbf7c0b908123913864aa4447e764
+      env:
+        SPAWNPOD_MARKER: approved-image-env
+    defaults:
+      run:
+        shell: sh
+        working-directory: /workspace
+    steps:
+      - name: Write output and environment files
+        id: produce
+        run: |
+          test "$SPAWNPOD_MARKER" = approved-image-env
+          printf 'value=from-step-one\n' >> "$GITHUB_OUTPUT"
+          printf 'SPAWNPOD_SHARED=from-env-file\n' >> "$GITHUB_ENV"
+      - name: Read output and environment in next step
+        run: |
+          test "${{ steps.produce.outputs.value }}" = from-step-one
+          test "$SPAWNPOD_SHARED" = from-env-file

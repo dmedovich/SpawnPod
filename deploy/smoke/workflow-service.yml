@@ -1,0 +1,20 @@
+name: SpawnPod service connectivity
+on: workflow_dispatch
+jobs:
+  echo-service:
+    runs-on: spawnpod
+    timeout-minutes: 10
+    services:
+      echo:
+        image: docker.io/library/alpine@sha256:3e9b4b680bfc9fb5269227cffbd6d42be39fbf7c0b908123913864aa4447e764
+        ports:
+          - 8080:8080
+    defaults:
+      run:
+        shell: sh
+        working-directory: /workspace
+    steps:
+      - name: Reach the approved service through its hostname
+        run: |
+          response=$(printf 'service-ok\n' | /bin/busybox nc -w 3 echo 8080)
+          test "$response" = service-ok

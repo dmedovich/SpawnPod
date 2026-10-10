@@ -1,0 +1,14 @@
+[Unit]
+Description=SpawnPod source egress proxy (local K3s smoke)
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+ExecStart=/home/dmedovich/SpawnPod/.local/bin/spawnpod-source-proxy --config /home/dmedovich/SpawnPod/.local/source-proxy.yaml
+Restart=always
+RestartSec=5s
+NoNewPrivileges=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=default.target

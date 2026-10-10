@@ -1,0 +1,21 @@
+name: SpawnPod Runner file transfer
+on: workflow_dispatch
+jobs:
+  file-transfer:
+    runs-on: spawnpod
+    timeout-minutes: 10
+    defaults:
+      run:
+        shell: sh
+        working-directory: /workspace
+    steps:
+      - name: Prepare default repository workdir
+        run: mkdir -p /workspace/spawnpod-admin/spawnpod-smoke
+      - name: Copy shell action into the job Pod
+        uses: http://127.0.0.1:3000/spawnpod-admin/spawnpod-smoke/.forgejo/actions/file-transfer@main
+      - name: Write output in the job Pod
+        id: copied
+        run: |
+          printf 'value=copied-source-ok\n' >> "$GITHUB_OUTPUT"
+      - name: Read output copied back to Runner
+        run: test "${{ steps.copied.outputs.value }}" = copied-source-ok

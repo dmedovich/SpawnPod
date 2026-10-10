@@ -1,0 +1,186 @@
+# Install and operate SpawnPod v0.1.0-rc.1
+
+This candidate targets Linux/amd64 and a single active controller. Use a test
+cluster first. Nothing in the release scripts installs into a cluster or
+publishes to a registry automatically.
+
+## Prerequisites
+
+- Kubernetes with stable ValidatingAdmissionPolicy, Restricted Pod Security,
+  an enforcing NetworkPolicy implementation, and sufficient ephemeral storage.
+  The tested baseline is K3s v1.34.12+k3s1.
+- An existing Forgejo instance and a registered official Runner v13.1.0.
+  See [official Runner installation](https://forgejo.org/docs/latest/admin/actions/installation/docker/)
+  and [registration](https://forgejo.org/docs/v15.0/admin/actions/registration/).
+- Administrator access for the one-time namespace/RBAC/admission installation.
+  Runner never receives this credential.
+- Approved job images containing the workflow's tools, runnable with a numeric
+  non-root UID and a read-only root filesystem. Node actions need Node in the
+  job image. The release's scratch image is the controller/agent runtime, not
+  a general job image.
+- A separately operated source proxy if using `network: source`. Its fixed
+  endpoint must be reachable from Pods and its approved destination routes
+  must be maintained. The isolated default profile needs no source proxy.
+
+## Verify the downloaded package
+
+Download the architecture archive and SHA256SUMS from the same release.
+
+```sh
+sha256sum -c SHA256SUMS
+tar -xzf spawnpod_v0.1.0-rc.1_linux_amd64.tar.gz
+cd spawnpod_v0.1.0-rc.1_linux_amd64
+sha256sum -c BINARY_SHA256SUMS
+./spawnpod version
+./spawnpod-agent version
+./spawnpod-source-proxy version
+```
+
+All three commands should print `v0.1.0-rc.1`. Checksums detect corruption;
+this candidate does not supply a detached signature or signing identity.
+`release.json` identifies the source revision and whether it was dirty. Only
+`dirty: false` builds are release candidates for publication.
+
+## Prepare runtime and Runner images
+
+The release can include a runtime OCI archive. Alternatively build it from
+this extracted package and push to your own registry:
+
+```sh
+podman build --build-arg VERSION=v0.1.0-rc.1 \
+  -f deploy/release/runtime.Dockerfile -t registry.example.com/spawnpod:v0.1.0-rc.1 .
+podman push registry.example.com/spawnpod:v0.1.0-rc.1
+```
+
+Record the registry manifest digest and use the immutable
+`registry.example.com/spawnpod@sha256:...` reference. The same runtime image
+provides `/spawnpod`, `/spawnpod-agent` and `/spawnpod-source-proxy`.
+Do not copy a local OCI index digest into a registry reference without
+checking that the registry preserves that digest.
+
+For an offline single-node K3s installation, import the downloaded OCI
+archive, inspect its manifest digest, and tag the exact named digest:
+
+```sh
+sudo k3s ctr -n k8s.io images import --digests spawnpod_v0.1.0-rc.1_linux_amd64.oci.tar
+sudo k3s ctr -n k8s.io images list
+# Replace DIGEST below with the manifest digest recorded in the release.
+sudo k3s ctr -n k8s.io images tag localhost/spawnpod:v0.1.0-rc.1 \
+  localhost/spawnpod@sha256:DIGEST
+```
+
+Import/tag on every eligible node, or use a reachable registry. Obtain the
+[official Runner image](https://forgejo.org/docs/latest/admin/actions/installation/docker/)
+for version 13.1.0, verify `/bin/forgejo-runner --version`, record its digest
+and make it available to the cluster. SpawnPod does not redistribute the
+Runner binary in its package.
+
+## Configure and render offline
+
+Copy `deploy/config.example.yaml` to an operator-owned file. Replace both
+sample execution image digests, select explicit resource budgets and keep
+services disabled until tested. `agentImage` points at the released runtime
+image. Define `sourceProxy` plus a source profile only when its proxy and
+network policy can be tested. The example budgets are placeholders, not a
+capacity recommendation for your hardware.
+
+```sh
+./spawnpod validate --config operator.yaml
+./spawnpod render-admission --config operator.yaml > admission.yaml
+./spawnpod render-deployment --config operator.yaml \
+  --controller-image registry.example.com/spawnpod@sha256:YOUR_RUNTIME_DIGEST \
+  --runner-image data.forgejo.org/forgejo/runner@sha256:YOUR_RUNNER_DIGEST \
+  > installation.yaml
+```
+
+Use full 64-character lowercase hexadecimal digests. The install renderer is
+for the `infra`/`ci` reference layout; it rejects other namespace/Lease names.
+It sets the in-cluster token configuration, private socket path and `:9090`
+monitor address. It deliberately omits any host kubeconfig path.
+
+Copy `deploy/release/runner.example.yaml` to private `runner.yaml`, mode 0600.
+Fill the registered UUID/shared secret and the reachable Forgejo HTTPS URL.
+Its label image must match the selected SpawnPod profile exactly. Use trusted
+CA certificates in the Runner image for private PKI; never disable TLS
+verification. Job image CA trust is a separate requirement. Do not use the
+local smoke-test certificates or loopback Forgejo URL on a real cluster.
+
+## Apply explicitly
+
+Review all rendered manifests before applying them. With administrator access:
+
+```sh
+kubectl apply -f deploy/security.yaml
+kubectl apply -f deploy/network-default-deny.yaml
+kubectl apply -f admission.yaml
+kubectl -n infra create secret generic spawnpod-runner --from-file=runner.yaml
+kubectl apply -f installation.yaml
+kubectl -n infra rollout status deployment/spawnpod --timeout=180s
+```
+
+The Secret command is for a first install and refuses an existing Secret;
+update it explicitly during credential rotation. The controller receives a
+projected rotating ServiceAccount token. Runner has no token mount, receives
+only its registration Secret, and waits for the controller's socket before
+starting. Both containers run with UID/GID 10001 and a read-only rootfs.
+
+The external source proxy has its own lifecycle and credentials policy. The
+release includes a route config example; a source profile fails preflight
+unless the exact corresponding egress policy is installed. This candidate
+does not deploy the proxy automatically or grant arbitrary DNS/internet access.
+
+## Verify the installation
+
+```sh
+kubectl -n infra logs deployment/spawnpod -c controller
+kubectl -n infra logs deployment/spawnpod -c runner
+kubectl -n infra exec deployment/spawnpod -c controller -- \
+  /spawnpod doctor --config /etc/spawnpod/config.yaml
+kubectl -n infra exec deployment/spawnpod -c controller -- \
+  /spawnpod smoke --config /etc/spawnpod/config.yaml
+kubectl -n infra port-forward service/spawnpod-monitor 9090:9090
+# In another terminal:
+curl --fail http://127.0.0.1:9090/healthz
+curl --fail http://127.0.0.1:9090/readyz
+curl --fail http://127.0.0.1:9090/metrics
+```
+
+Then dispatch a real Forgejo workflow with sequential steps, file transfer
+and cancellation. If enabled, test service isolation and source checkout.
+Use the source repository's `deploy/smoke/check-cluster-policy.py` and live
+network/recovery scenarios to verify the actual cluster enforcement. `doctor`
+and a healthy Pod alone do not establish isolation.
+
+Do not expose monitoring to the public internet. Restrict management access
+using your cluster networking controls. Scrape RPC latency sum/count and
+reconciliation failures; investigate increasing failures or stale successful
+reconciliation timestamps. Production capacity and SLOs must be measured on
+the target node before raising job concurrency.
+
+## Upgrade, rollback and credentials
+
+1. Quiesce Runner scheduling and wait for active workflows/environments to
+   finish. RPC drain does not finish an entire workflow across multiple steps.
+2. Save current operator config, manifests, image digests and non-secret
+   environment records. Keep registration credentials in your secret store.
+3. Render and review the new admission policy and install manifest. Apply the
+   policy before starting a controller that requires its new image allowlist.
+4. Apply the install manifest. Recreate and Lease election ensure one active
+   controller; config checksum changes trigger a new Pod. Repeat doctor,
+   smoke and a real workflow before re-enabling scheduling.
+5. For rollback, restore the matching old config, admission and image digests
+   together, then rerun checks. This first release has no prior supported
+   version to roll back to. Record schemas 1 and 2 are readable; unknown
+   future schemas fail closed. Do not downgrade across an untested schema
+   change or delete records to force startup.
+6. Rotate Runner credentials by replacing the private Secret and restarting
+   the Deployment while quiesced. Kubernetes projected tokens rotate
+   automatically. Review source-route pins and CA expiry independently.
+
+For diagnosis use `environments list`, `environments inspect ID` and
+`environments cleanup --dry-run` with the configured identity. The last
+command is a preview; this candidate has no destructive manual cleanup CLI.
+The controller retries owned cleanup. Restore API access or restart the
+controller to reconcile interrupted environments; never remove unverified
+foreign resources. Uninstall only after jobs are drained and resources
+cleaned, and preserve state until recovery is no longer needed.

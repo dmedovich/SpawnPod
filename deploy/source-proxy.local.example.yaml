@@ -1,0 +1,8 @@
+# Local K3s smoke only: bind the host bridge and forward to rootless Forgejo.
+# The controller sourceProxy value must be http://10.42.0.1:3128.
+listen: 10.42.0.1:3128
+routes:
+  - host: forgejo.local
+    port: 3000
+    address: 127.0.0.1
+    allowLoopback: true

@@ -1,0 +1,137 @@
+# Reference security baseline for the example infra/ci layout. Verify against
+# the actual K3s version and admission controller before enabling services.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: infra
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ci
+  labels:
+    spawnpod.dev/role: workload
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce-version: v1.34
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/audit-version: v1.34
+    pod-security.kubernetes.io/warn: restricted
+    pod-security.kubernetes.io/warn-version: v1.34
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: spawnpod-controller
+  namespace: infra
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: spawnpod-job
+  namespace: ci
+automountServiceAccountToken: false
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: spawnpod-workloads
+  namespace: ci
+rules:
+  - apiGroups: [""]
+    resources: [configmaps]
+    verbs: [get, list, create, update, delete]
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [get, list, create, delete]
+  - apiGroups: [""]
+    resources: [pods/exec]
+    verbs: [create]
+  - apiGroups: [""]
+    resources: [services]
+    verbs: [get, create, delete]
+  - apiGroups: [networking.k8s.io]
+    resources: [networkpolicies]
+    verbs: [get, create, delete]
+  - apiGroups: [""]
+    resources: [limitranges]
+    resourceNames: [spawnpod-container-ceilings]
+    verbs: [get]
+  - apiGroups: [""]
+    resources: [resourcequotas]
+    resourceNames: [spawnpod-namespace-budget]
+    verbs: [get]
+  - apiGroups: [""]
+    resources: [serviceaccounts]
+    resourceNames: [spawnpod-job]
+    verbs: [get]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: spawnpod-workloads
+  namespace: ci
+subjects:
+  - kind: ServiceAccount
+    name: spawnpod-controller
+    namespace: infra
+roleRef:
+  kind: Role
+  name: spawnpod-workloads
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: spawnpod-lease
+  namespace: infra
+rules:
+  # Create cannot be limited with resourceNames; Get/Update are named.
+  - apiGroups: [coordination.k8s.io]
+    resources: [leases]
+    verbs: [list, create]
+  - apiGroups: [coordination.k8s.io]
+    resources: [leases]
+    resourceNames: [spawnpod-controller]
+    verbs: [get, update]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: spawnpod-lease
+  namespace: infra
+subjects:
+  - kind: ServiceAccount
+    name: spawnpod-controller
+    namespace: infra
+roleRef:
+  kind: Role
+  name: spawnpod-lease
+  apiGroup: rbac.authorization.k8s.io
+---
+# Read-only verification of the generated workload policy at controller startup.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: spawnpod-admission-read
+rules:
+  - apiGroups: [admissionregistration.k8s.io]
+    resources: [validatingadmissionpolicies, validatingadmissionpolicybindings]
+    resourceNames: [spawnpod-workload]
+    verbs: [get]
+  - apiGroups: [""]
+    resources: [namespaces]
+    resourceNames: [ci]
+    verbs: [get]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: spawnpod-admission-read
+subjects:
+  - kind: ServiceAccount
+    name: spawnpod-controller
+    namespace: infra
+roleRef:
+  kind: ClusterRole
+  name: spawnpod-admission-read
+  apiGroup: rbac.authorization.k8s.io

@@ -1,0 +1,15 @@
+name: SpawnPod first workflow
+on: workflow_dispatch
+jobs:
+  sequential-steps:
+    runs-on: spawnpod
+    timeout-minutes: 10
+    defaults:
+      run:
+        shell: sh
+        working-directory: /workspace
+    steps:
+      - name: Write a file in the workspace
+        run: printf 'spawnpod-workflow-ok' > /workspace/workflow.txt
+      - name: Read it in a later step
+        run: test "$(cat /workspace/workflow.txt)" = spawnpod-workflow-ok

@@ -1,0 +1,15 @@
+# Apply in the configured workload namespace before enabling services.
+# This policy intentionally blocks all traffic until per-environment policies
+# and any approved source/proxy routes are installed.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: spawnpod-default-deny
+  namespace: ci
+spec:
+  podSelector:
+    matchLabels:
+      spawnpod.dev/managed: "true"
+  policyTypes:
+    - Ingress
+    - Egress

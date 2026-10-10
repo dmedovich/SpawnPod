@@ -1,0 +1,12 @@
+name: SpawnPod Runner default workdir
+on: workflow_dispatch
+jobs:
+  default-workdir:
+    runs-on: spawnpod
+    timeout-minutes: 10
+    steps:
+      - name: Run copied action without preparing the workdir
+        uses: http://127.0.0.1:3000/spawnpod-admin/spawnpod-smoke/.forgejo/actions/file-transfer@main
+      - name: Run shell without checkout
+        shell: sh
+        run: test "$PWD" = /workspace/spawnpod-admin/spawnpod-smoke

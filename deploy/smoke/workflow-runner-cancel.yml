@@ -1,0 +1,22 @@
+name: SpawnPod Runner cancellation
+on:
+  workflow_dispatch:
+    inputs:
+      delay:
+        description: Seconds to sleep
+        required: true
+        type: string
+concurrency:
+  group: spawnpod-runner-cancel-smoke
+  cancel-in-progress: true
+jobs:
+  cancel-race:
+    runs-on: spawnpod
+    timeout-minutes: 10
+    defaults:
+      run:
+        shell: sh
+        working-directory: /workspace
+    steps:
+      - name: Hold the job until cancelled or complete
+        run: sleep "${{ inputs.delay }}"

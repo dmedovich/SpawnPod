@@ -1,0 +1,44 @@
+version: 1
+kubernetes:
+  namespace: ci
+  # Leave empty for the Pod's service account; set a path for local development.
+  kubeconfig: ""
+  leaseNamespace: infra
+  leaseName: spawnpod-controller
+  # Example namespace budget; size it against measured node capacity.
+  quota:
+    maxPods: 16
+    maxConfigMaps: 1024
+    maxServices: 16
+    maxNetworkPolicies: 33
+    requestsCPU: "4"
+    limitsCPU: "8"
+    requestsMemory: 4Gi
+    limitsMemory: 16Gi
+    requestsStorage: 16Gi
+    limitsStorage: 48Gi
+controller:
+  reconcileInterval: 30s
+  cleanupTimeout: 2m
+  drainTimeout: 30s
+  # Bind to loopback for host installs; the deployment renderer uses :9090.
+  monitorAddress: 127.0.0.1:9090
+  socketPath: /run/spawnpod/backend.sock
+  # Enable only after service NetworkPolicy, admission and K3s checks pass.
+  enableServices: false
+# Replace these sample digests with digests of built, approved images.
+agentImage: registry.example.com/spawnpod-agent@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+profiles:
+  default:
+    image: registry.example.com/ci-base@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+    architecture: amd64
+    uid: 10001
+    gid: 10001
+    cpuRequest: 250m
+    cpuLimit: "1"
+    memoryRequest: 256Mi
+    memoryLimit: 1Gi
+    storageRequest: 1Gi
+    storageLimit: 4Gi
+    workspaceSize: 2Gi
+    maxLifetime: 1h

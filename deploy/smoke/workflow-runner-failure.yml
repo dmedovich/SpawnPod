@@ -1,0 +1,13 @@
+name: SpawnPod Runner expected failure
+on: workflow_dispatch
+jobs:
+  nonzero-exit:
+    runs-on: spawnpod
+    timeout-minutes: 10
+    defaults:
+      run:
+        shell: sh
+        working-directory: /workspace
+    steps:
+      - name: Exit with a nonzero status
+        run: exit 17

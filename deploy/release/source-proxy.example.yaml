@@ -1,0 +1,7 @@
+# Operate the source proxy separately at a fixed IP reachable from job Pods.
+# Replace with operator-verified public endpoint addresses; no DNS resolution.
+listen: 127.0.0.1:3128
+routes:
+  - host: forgejo.example.com
+    port: 443
+    address: REPLACE_WITH_VERIFIED_PUBLIC_IP

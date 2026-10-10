@@ -1,0 +1,7 @@
+name: SpawnPod copied action
+description: Verify that Runner copied this action into the job workspace
+runs:
+  using: composite
+  steps:
+    - shell: sh
+      run: test "$(cat "$GITHUB_ACTION_PATH/marker.txt")" = copied-action-ok

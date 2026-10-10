@@ -1,0 +1,11 @@
+# Local failure injection only: deny ClusterIP Service creation after the
+# service's two NetworkPolicies have been created. Delete this quota promptly
+# after the test.
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: spawnpod-smoke-no-services
+  namespace: ci
+spec:
+  hard:
+    count/services: "0"
