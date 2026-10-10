@@ -9,9 +9,11 @@ runs commands, moves workspace files and cleans up Kubernetes resources.
 It is intended for operators who already use Kubernetes and want to decide
 exactly which images, resources and network access their CI jobs may use.
 
-**Status: v0.1.0-rc.3, Linux/amd64 release candidate.** Tested locally with
-Forgejo Runner, including private HTTPS checkout. See the
-[validation results](docs/VALIDATION.md) and [security model](docs/SECURITY.md).
+**Status: v0.1.0-rc.4 release candidate.** Linux/amd64 was validated locally
+with Forgejo Runner on earlier candidates, including private HTTPS checkout.
+Linux/arm64 artifacts have not been tested on target hardware. See the
+[validation results](docs/VALIDATION.md) and
+[security model](docs/SECURITY.md).
 
 ## How it works
 
@@ -35,7 +37,8 @@ and retry cleanup.
 - Optional approved service containers and controlled source-network access.
 - Generated admission policy, RBAC, quotas and default-deny NetworkPolicies.
 - Recovery reconciliation, health/readiness endpoints and Prometheus metrics.
-- Static binaries, an OCI runtime image and release checksums.
+- Linux/amd64 and Linux/arm64 binaries, a multi-platform OCI runtime image,
+  release checksums, SBOMs and provenance attestations.
 
 SpawnPod supports **Forgejo Runner v13.1.0** and its experimental plugin
 protocol. It does not provide arbitrary Docker compatibility, privileged
@@ -58,6 +61,7 @@ To build from source with the release-tested Go 1.27.2 toolchain:
 ```sh
 make check
 ./scripts/release.sh
+./scripts/release.sh "$(cat VERSION)" arm64
 ./scripts/release-image.sh
 ```
 
@@ -74,7 +78,7 @@ With automatic selection enabled, Go downloads it if needed. See
 - [Release specification](docs/SPEC.md)
 - [Security model and installation requirements](docs/SECURITY.md)
 - [Validation and local K3s acceptance](docs/VALIDATION.md)
-- [Release process](docs/RELEASE.md) and [candidate release notes](docs/releases/v0.1.0-rc.3.md)
+- [Release process](docs/RELEASE.md) and [candidate release notes](docs/releases/v0.1.0-rc.4.md)
 
 ## Repository
 

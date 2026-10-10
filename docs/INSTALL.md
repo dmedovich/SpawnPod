@@ -1,4 +1,4 @@
-# Install and operate SpawnPod v0.1.0-rc.3
+# Install and operate SpawnPod v0.1.0-rc.4
 
 Supported platform: Linux/amd64, one active controller. Start with a test
 cluster. Review the [security model](SECURITY.md) and
@@ -30,17 +30,16 @@ directory (amd64 shown).
 
 ```sh
 sha256sum -c SHA256SUMS
-tar -xzf spawnpod_v0.1.0-rc.3_linux_amd64.tar.gz
-cd spawnpod_v0.1.0-rc.3_linux_amd64
+tar -xzf spawnpod_v0.1.0-rc.4_linux_amd64.tar.gz
+cd spawnpod_v0.1.0-rc.4_linux_amd64
 sha256sum -c BINARY_SHA256SUMS
 ./spawnpod version
 ./spawnpod-agent version
 ./spawnpod-source-proxy version
 ```
 
-All three commands should print `v0.1.0-rc.3`. Checksums detect corruption.
-The existing rc.3 candidate does not supply a detached signature. Archives
-created by the current tag workflow have GitHub build and SBOM attestations;
+All three commands should print `v0.1.0-rc.4`. Checksums detect corruption.
+Archives created by the tag workflow have GitHub build and SBOM attestations;
 verify one with `gh attestation verify ARCHIVE -R dmedovich/SpawnPod`.
 `release.json` identifies the source revision and whether it was dirty. Published packages must have
 `dirty: false`.
@@ -54,9 +53,9 @@ provenance attestations. See [release verification](RELEASE.md#publish).
 Alternatively build from this extracted package and push to your own registry:
 
 ```sh
-podman build --build-arg VERSION=v0.1.0-rc.3 \
-  -f deploy/release/runtime.Dockerfile -t registry.example.com/spawnpod:v0.1.0-rc.3 .
-podman push registry.example.com/spawnpod:v0.1.0-rc.3
+podman build --build-arg VERSION=v0.1.0-rc.4 \
+  -f deploy/release/runtime.Dockerfile -t registry.example.com/spawnpod:v0.1.0-rc.4 .
+podman push registry.example.com/spawnpod:v0.1.0-rc.4
 ```
 
 Record the registry manifest digest and use the immutable
@@ -69,10 +68,10 @@ For an offline single-node K3s installation, import the downloaded OCI
 archive, inspect its manifest digest, and tag the exact named digest:
 
 ```sh
-sudo k3s ctr -n k8s.io images import --digests ../spawnpod_v0.1.0-rc.3_linux_amd64.oci.tar
+sudo k3s ctr -n k8s.io images import --digests ../spawnpod_v0.1.0-rc.4_linux_amd64.oci.tar
 sudo k3s ctr -n k8s.io images list
 # Replace DIGEST below with the manifest digest recorded in the release.
-sudo k3s ctr -n k8s.io images tag localhost/spawnpod:v0.1.0-rc.3 \
+sudo k3s ctr -n k8s.io images tag localhost/spawnpod:v0.1.0-rc.4 \
   localhost/spawnpod@sha256:DIGEST
 ```
 

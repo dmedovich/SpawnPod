@@ -1,6 +1,6 @@
 # SpawnPod release specification
 
-Version: **v0.1.0-rc.3**. See [architecture](ARCHITECTURE.md) for components
+Version: **v0.1.0-rc.4**. See [architecture](ARCHITECTURE.md) for components
 and [security](SECURITY.md) for syscall restrictions and the trust model.
 
 ## Supported platforms and integration
@@ -21,11 +21,13 @@ files, and reconciles owned resources after interruption.
 | State storage | Non-secret ConfigMaps in `ci`; record versions 1 and 2 |
 | Services | Explicitly approved separate Pods and ClusterIP Services |
 | Network | Isolated or source profile; maintained explicit HTTP(S) proxy routes |
-| Distribution | Static Linux/amd64 binaries and a scratch runtime image build recipe |
+| Distribution | Static Linux/amd64 and Linux/arm64 archives, plus a multi-platform scratch runtime image |
 
 The official Runner source used for compatibility tests is commit
-`6095cb17bfdbded5aa4ea84c18a4b69fd9574cca`. Unsupported features: ARM64 execution, HA, arbitrary Docker compatibility,
-privileged image builds, PVC workspaces, cross-job caches and SSH checkout.
+`6095cb17bfdbded5aa4ea84c18a4b69fd9574cca`. ARM64 execution has not been
+validated on target hardware. Unsupported features include HA, arbitrary
+Docker compatibility, privileged image builds, PVC workspaces, cross-job
+caches and SSH checkout.
 
 ## RPC and execution
 
