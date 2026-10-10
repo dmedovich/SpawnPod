@@ -45,28 +45,22 @@ RPC serving. Lease loss stops RPCs immediately. Planned shutdown drains active
 RPCs for a bounded interval, not a complete multi-step workflow; stop Runner
 from accepting work before upgrades.
 
-## Execution and storage boundaries
+## Execution and storage
 
 Each job gets an `emptyDir` workspace reused between its steps. The approved
 image supplies the shell, Git, Node and other workflow tools. An init container
 installs the agent; the job container runs it as its main process.
 
-Resource limits apply to the container. Unreleased hardening installs an
+Resource limits apply to the container. The command helper installs an
 inherited seccomp guard that prevents commands from changing session/process
 group. The supervisor kills the group before reaping the leader, and bounded
-writes keep a stalled output reader from blocking cleanup. This restricts the
-command contract; it does not create a separate sandbox inside the job container.
-See [security](SECURITY.md) for restrictions and target validation requirements.
+writes keep a stalled output reader from blocking cleanup. Commands must
+follow the supported syscall restrictions.
+See [security](SECURITY.md) for command restrictions.
 
 ConfigMaps contain management records, not command environments or service
-credentials. Record versions 1 and 2 are supported. Unreleased hardening returns supported records alongside a typed partial-list
-error, allowing their cleanup while preserving unsupported records. Incompatible
-records still prevent controller startup; a running engine blocks new environments
-after reconciliation detects them. Mixed-version controllers and automatic rollback
-across schema changes remain unsupported.
-
-## Further reading
-
-- [Release contract](SPEC.md) for limits and protocol semantics.
-- [Installation](INSTALL.md) for generated policies and credential separation.
-- [Security](SECURITY.md) for assumptions, review findings and acceptance gates.
+credentials. Record versions 1 and 2 are supported. The store returns valid
+records alongside a typed partial-list error, allowing cleanup while preserving
+unsupported records. Incompatible records prevent controller startup. A running
+engine blocks new environments after reconciliation detects them. Mixed-version
+controllers and automatic rollback across schema changes are unsupported.

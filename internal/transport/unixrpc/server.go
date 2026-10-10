@@ -102,7 +102,7 @@ func Serve(ctx context.Context, path string, plugin pb.BackendPluginServer) erro
 // the caller continues renewing the Lease, then forces cancellation at timeout.
 func ServeWithOptions(ctx context.Context, path string, plugin pb.BackendPluginServer, options Options) error {
 	if plugin == nil {
-		return errors.New("Forgejo plugin is nil")
+		return errors.New("forgejo plugin is nil")
 	}
 	listener, cleanup, err := listen(path)
 	if err != nil {

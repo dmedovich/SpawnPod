@@ -98,13 +98,13 @@ func (s *State) Stream(srv any, stream grpc.ServerStream, info *grpc.StreamServe
 }
 func (s *State) Handler() http.Handler {
 	mux := http.NewServeMux()
-	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) { fmt.Fprintln(w, "ok") })
+	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) { _, _ = fmt.Fprintln(w, "ok") })
 	mux.HandleFunc("/readyz", func(w http.ResponseWriter, r *http.Request) {
 		if !s.Ready() {
 			http.Error(w, "not ready", http.StatusServiceUnavailable)
 			return
 		}
-		fmt.Fprintln(w, "ready")
+		_, _ = fmt.Fprintln(w, "ready")
 	})
 	mux.HandleFunc("/metrics", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
@@ -114,17 +114,17 @@ func (s *State) Handler() http.Handler {
 		if s.serving && !s.draining && s.api && time.Since(s.checked) < 20*time.Second {
 			ready = 1
 		}
-		fmt.Fprintf(w, "# TYPE spawnpod_ready gauge\nspawnpod_ready %d\n", ready)
-		fmt.Fprintf(w, "# TYPE spawnpod_reconciliations_total counter\nspawnpod_reconciliations_total %d\n", s.reconciles)
-		fmt.Fprintf(w, "# TYPE spawnpod_reconciliation_failures_total counter\nspawnpod_reconciliation_failures_total %d\n", s.reconcileFailures)
+		_, _ = fmt.Fprintf(w, "# TYPE spawnpod_ready gauge\nspawnpod_ready %d\n", ready)
+		_, _ = fmt.Fprintf(w, "# TYPE spawnpod_reconciliations_total counter\nspawnpod_reconciliations_total %d\n", s.reconciles)
+		_, _ = fmt.Fprintf(w, "# TYPE spawnpod_reconciliation_failures_total counter\nspawnpod_reconciliation_failures_total %d\n", s.reconcileFailures)
 		last := int64(0)
 		if !s.lastReconcile.IsZero() {
 			last = s.lastReconcile.Unix()
 		}
-		fmt.Fprintf(w, "# TYPE spawnpod_reconciliation_last_success_timestamp_seconds gauge\nspawnpod_reconciliation_last_success_timestamp_seconds %d\n", last)
-		fmt.Fprintln(w, "# TYPE spawnpod_rpc_total counter\n# TYPE spawnpod_rpc_failures_total counter\n# TYPE spawnpod_rpc_active gauge\n# TYPE spawnpod_rpc_duration_seconds summary")
+		_, _ = fmt.Fprintf(w, "# TYPE spawnpod_reconciliation_last_success_timestamp_seconds gauge\nspawnpod_reconciliation_last_success_timestamp_seconds %d\n", last)
+		_, _ = fmt.Fprintln(w, "# TYPE spawnpod_rpc_total counter\n# TYPE spawnpod_rpc_failures_total counter\n# TYPE spawnpod_rpc_active gauge\n# TYPE spawnpod_rpc_duration_seconds summary")
 		for method, m := range s.rpc {
-			fmt.Fprintf(w, "spawnpod_rpc_total{method=%q} %d\nspawnpod_rpc_failures_total{method=%q} %d\nspawnpod_rpc_active{method=%q} %d\nspawnpod_rpc_duration_seconds_sum{method=%q} %g\nspawnpod_rpc_duration_seconds_count{method=%q} %d\n", method, m.count, method, m.failures, method, m.active, method, m.seconds, method, m.count)
+			_, _ = fmt.Fprintf(w, "spawnpod_rpc_total{method=%q} %d\nspawnpod_rpc_failures_total{method=%q} %d\nspawnpod_rpc_active{method=%q} %d\nspawnpod_rpc_duration_seconds_sum{method=%q} %g\nspawnpod_rpc_duration_seconds_count{method=%q} %d\n", method, m.count, method, m.failures, method, m.active, method, m.seconds, method, m.count)
 		}
 	})
 	return mux

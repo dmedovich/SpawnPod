@@ -70,7 +70,7 @@ func run(args []string) error {
 		if err != nil {
 			return err
 		}
-		defer source.Close()
+		defer func() { _ = source.Close() }()
 		dest, err := os.OpenFile(args[1], os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0555)
 		if err != nil {
 			return err

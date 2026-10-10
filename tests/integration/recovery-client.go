@@ -47,7 +47,7 @@ func run(socket, image, idFile, mode, target, profile string) error {
 	if err != nil {
 		return err
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	client := pb.NewBackendPluginClient(conn)
 	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Minute)
 	defer cancel()
@@ -61,18 +61,18 @@ func run(socket, image, idFile, mode, target, profile string) error {
 		}
 		created, err := client.Create(ctx, request)
 		if err != nil {
-			return fmt.Errorf("Create: %w", err)
+			return fmt.Errorf("create: %w", err)
 		}
 		id := created.GetEnvironmentId()
 		if id == "" {
-			return errors.New("Create returned no environment ID")
+			return errors.New("create returned no environment ID")
 		}
 		if err := os.WriteFile(idFile, []byte(id+"\n"), 0600); err != nil {
 			return fmt.Errorf("save environment ID %s: %w", id, err)
 		}
 		started, err := client.Start(ctx, &pb.StartRequest{EnvironmentId: id})
 		if err != nil {
-			return fmt.Errorf("Start %s: %w", id, err)
+			return fmt.Errorf("start %s: %w", id, err)
 		}
 		complete := false
 		for {
@@ -81,14 +81,14 @@ func run(socket, image, idFile, mode, target, profile string) error {
 				break
 			}
 			if err != nil {
-				return fmt.Errorf("Start stream %s: %w", id, err)
+				return fmt.Errorf("start stream %s: %w", id, err)
 			}
 			if message.GetStartComplete() != nil {
 				complete = true
 			}
 		}
 		if !complete {
-			return errors.New("Start ended without StartComplete")
+			return errors.New("start ended without StartComplete")
 		}
 		fmt.Printf("ready environment %s\n", id)
 		return nil
@@ -103,7 +103,7 @@ func run(socket, image, idFile, mode, target, profile string) error {
 	}
 	if mode == "remove" {
 		if _, err := client.Remove(ctx, &pb.RemoveRequest{EnvironmentId: id}); err != nil {
-			return fmt.Errorf("Remove %s: %w", id, err)
+			return fmt.Errorf("remove %s: %w", id, err)
 		}
 		fmt.Printf("removed environment %s\n", id)
 		return nil
@@ -130,27 +130,31 @@ func run(socket, image, idFile, mode, target, profile string) error {
 		}
 		_, copyErr := stream.CloseAndRecv()
 		if status.Code(copyErr) != codes.Internal {
-			return fmt.Errorf("expected tar traversal denial, got %v", copyErr)
+			if copyErr != nil {
+				return fmt.Errorf("expected tar traversal denial: %w", copyErr)
+			}
+			return errors.New("expected tar traversal denial, but transfer succeeded")
 		}
 		fmt.Printf("tar traversal denied in %s; controller reports the extraction error\n", id)
 		return nil
 	}
 	command := []string{"sh", "-c", "printf 'recovery-ok'"}
-	if mode == "hold" {
+	switch mode {
+	case "hold":
 		command = []string{"sh", "-c", "printf 'hold-started\\n'; sleep 300"}
-	} else if mode == "service-echo" {
+	case "service-echo":
 		command = []string{"sh", "-c", "printf 'service-ok\\n' | /bin/busybox nc -w 3 echo 8080"}
-	} else if mode == "probe" {
+	case "probe":
 		if net.ParseIP(target) == nil {
 			return errors.New("-target must be a literal IP for probe")
 		}
 		command = []string{"sh", "-c", "if /bin/busybox nc -z -w 3 " + target + " 8080; then printf reachable; else printf denied; fi"}
-	} else if mode == "source-probe" {
+	case "source-probe":
 		command = []string{"sh", "-c", "set -e; /bin/busybox wget -q -O /tmp/source-response http://forgejo.local:3000/api/v1/version; test -s /tmp/source-response; if /bin/busybox wget -q -O /dev/null http://other.local:3000/; then exit 1; fi; for endpoint in '10.42.0.1 3000' '10.43.0.1 443' '169.254.169.254 80'; do if /bin/busybox nc -z -w 2 $endpoint; then exit 1; fi; done; printf source-ok"}
 	}
 	stream, err := client.Exec(ctx, &pb.ExecRequest{EnvironmentId: id, Command: command, Workdir: "/workspace"})
 	if err != nil {
-		return fmt.Errorf("Exec %s: %w", id, err)
+		return fmt.Errorf("exec %s: %w", id, err)
 	}
 	var output bytes.Buffer
 	completed := false
@@ -160,7 +164,7 @@ func run(socket, image, idFile, mode, target, profile string) error {
 			break
 		}
 		if err != nil {
-			return fmt.Errorf("Exec stream %s: %w", id, err)
+			return fmt.Errorf("exec stream %s: %w", id, err)
 		}
 		if data := message.GetData(); data != nil && data.GetStream() == pb.DataChunk_STDOUT {
 			if output.Len()+len(data.GetData()) > 1<<20 {
@@ -173,17 +177,17 @@ func run(socket, image, idFile, mode, target, profile string) error {
 			}
 		}
 		if failure := message.GetExecFailed(); failure != nil {
-			return fmt.Errorf("Exec failed: %s", failure.GetErrorMessage())
+			return fmt.Errorf("exec failed: %s", failure.GetErrorMessage())
 		}
 		if done := message.GetExecComplete(); done != nil {
 			if done.GetExitCode() != 0 {
-				return fmt.Errorf("Exec exited %d", done.GetExitCode())
+				return fmt.Errorf("exec exited %d", done.GetExitCode())
 			}
 			completed = true
 		}
 	}
 	if !completed {
-		return errors.New("Exec ended without ExecComplete")
+		return errors.New("exec ended without ExecComplete")
 	}
 	if mode == "exec" && output.String() != "recovery-ok" {
 		return fmt.Errorf("unexpected command output %q", output.String())

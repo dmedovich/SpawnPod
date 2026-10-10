@@ -21,15 +21,21 @@ func Doctor(ctx context.Context, cfg config.Config, client kubernetes.Interface,
 		return fmt.Errorf("validate configuration: %w", err)
 	}
 	if client == nil || out == nil {
-		return errors.New("Kubernetes client and output writer are required")
+		return errors.New("kubernetes client and output writer are required")
+	}
+	var reportErr error
+	write := func(format string, args ...any) {
+		if reportErr == nil {
+			_, reportErr = fmt.Fprintf(out, format, args...)
+		}
 	}
 	var failures []string
 	check := func(name string, err error) {
 		if err == nil {
-			fmt.Fprintf(out, "OK   %s\n", name)
+			write("OK   %s\n", name)
 			return
 		}
-		fmt.Fprintf(out, "FAIL %s: %v\n", name, err)
+		write("FAIL %s: %v\n", name, err)
 		failures = append(failures, name)
 	}
 	check("controller preflight", Preflight(ctx, cfg, client))
@@ -41,11 +47,11 @@ func Doctor(ctx context.Context, cfg config.Config, client kubernetes.Interface,
 		name := fmt.Sprintf("RBAC %s %s/%s %s", rule.Verb, rule.Namespace, rule.Resource, rule.Name)
 		check(name, doctorAccess(ctx, client, rule))
 	}
-	fmt.Fprintln(out, "Doctor is read-only; use separate live scenarios to verify admission denials, NetworkPolicy isolation, scheduling, image pulls and Runner execution.")
+	write("Doctor is read-only; use separate live scenarios to verify admission denials, NetworkPolicy isolation, scheduling, image pulls and Runner execution.\n")
 	if len(failures) != 0 {
-		return fmt.Errorf("doctor: %d check(s) failed: %s", len(failures), strings.Join(failures, ", "))
+		return errors.Join(reportErr, fmt.Errorf("doctor: %d check(s) failed: %s", len(failures), strings.Join(failures, ", ")))
 	}
-	return nil
+	return reportErr
 }
 
 func doctorNamespace(ctx context.Context, cfg config.Config, client kubernetes.Interface) error {

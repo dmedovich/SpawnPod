@@ -1,31 +1,16 @@
 # SpawnPod release specification
 
-Applies to **v0.1.0-rc.2**. This document specifies the shipped candidate;
-[Architecture](ARCHITECTURE.md) describes the components and lifecycle.
-Capabilities outside this specification are not promises made by this release.
+Version: **v0.1.0-rc.3**. See [architecture](ARCHITECTURE.md) for components
+and [security](SECURITY.md) for syscall restrictions and the trust model.
 
-This candidate includes the [security fixes](SECURITY.md) and the local checks
-recorded in [VALIDATION.md](VALIDATION.md). Target-cluster acceptance remains required.
-
-## Command hardening
-
-Commands run with an inherited seccomp guard: session/process-group changes,
-namespace creation and tracing are unsupported. Ordinary foreground shell/Git/Node
-use remains supported; failure to install the guard prevents execution. Cleanup
-kills the process group before reaping its leader. Socket writes and cleanup are
-bounded even when the reader stalls. Infrastructure errors use fixed messages;
-workflow output remains raw. Recovery processes supported records while preserving
-invalid or unknown records and reporting incompatibility. See [security](SECURITY.md)
-for the exact restrictions, detection interval and local test coverage.
-
-## Purpose and supported boundary
+## Supported platforms and integration
 
 SpawnPod is an execution backend, not a workflow scheduler. Forgejo Runner
 chooses commands and step ordering; SpawnPod validates requests, provisions
 bounded Kubernetes environments, supervises commands, transfers workspace
 files, and reconciles owned resources after interruption.
 
-| Boundary | Candidate contract |
+| Component | Supported configuration |
 |---|---|
 | Host/Pod platform | Linux/amd64; tested on K3s v1.34.12+k3s1 |
 | Adapter | Official Forgejo Runner v13.1.0, pinned `plugin.v1alpha` schema |
@@ -39,11 +24,10 @@ files, and reconciles owned resources after interruption.
 | Distribution | Static Linux/amd64 binaries and a scratch runtime image build recipe |
 
 The official Runner source used for compatibility tests is commit
-`6095cb17bfdbded5aa4ea84c18a4b69fd9574cca`. This release does not claim live
-ARM64 support, HA execution, arbitrary Docker compatibility, privileged image
-builds, PVC workspaces, cross-job caches or SSH checkout.
+`6095cb17bfdbded5aa4ea84c18a4b69fd9574cca`. Unsupported features: ARM64 execution, HA, arbitrary Docker compatibility,
+privileged image builds, PVC workspaces, cross-job caches and SSH checkout.
 
-## RPC and execution contract
+## RPC and execution
 
 The authoritative wire schema is
 `internal/adapter/forgejo/proto/plugin.proto`; its MIT license is preserved.
@@ -151,14 +135,7 @@ proxy is an operator-maintained dependency; changing public upstream IPs
 requires route maintenance. Strong tenant isolation requires a separately
 validated runtime or node boundary.
 
-## Acceptance evidence
+## Validation
 
-The local candidate was exercised with official Runner workflows, including
-private HTTPS Node-based checkout, service isolation, bounded tar transfer and
-restart/API/deletion/lost-response recovery. These are historical local checks,
-not proof of target-cluster behavior or complete fault coverage.
-
-The source test suite covers lifecycle transitions, policy rendering, RPC
-mapping, workspace validation, probes and drain behavior. The later source
-review and reproduction results are summarized in [security](SECURITY.md).
-Outstanding production gates are listed in [release process](RELEASE.md).
+[VALIDATION.md](VALIDATION.md) records source checks, official Runner workflows,
+local K3s isolation and recovery tests, and workload measurements.

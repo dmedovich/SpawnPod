@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"path"
 	"regexp"
 	"strconv"
@@ -62,7 +63,7 @@ type Server struct {
 
 func New(backend Backend, records RecordReader, cfg config.Config) (*Server, error) {
 	if backend == nil || records == nil {
-		return nil, errors.New("Forgejo backend and record reader are required")
+		return nil, errors.New("forgejo backend and record reader are required")
 	}
 	if err := cfg.Validate(); err != nil {
 		return nil, err
@@ -263,9 +264,7 @@ func (s *Server) Exec(req *pb.ExecRequest, stream grpc.ServerStreamingServer[pb.
 	env := req.GetEnv()
 	if profile.Network == "source" {
 		env = make(map[string]string, len(req.GetEnv())+6)
-		for key, value := range req.GetEnv() {
-			env[key] = value
-		}
+		maps.Copy(env, req.GetEnv())
 		for _, key := range []string{"HTTP_PROXY", "http_proxy", "HTTPS_PROXY", "https_proxy"} {
 			env[key] = s.sourceProxy
 		}

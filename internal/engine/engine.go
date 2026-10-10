@@ -117,8 +117,7 @@ func (e *Engine) Create(ctx context.Context, req CreateRequest) (Record, error) 
 		version = 2
 	}
 	record := Record{Version: version, ID: id, Owner: req.Owner, Profile: req.Profile, CreatedAt: time.Now().UTC(), Deadline: req.Deadline.UTC(), State: StateProvisioning, Job: JobHandle{Name: "sp-" + id}, Services: serviceRecords}
-	record, err = e.Store.Create(createCtx, record)
-	if err != nil {
+	if _, err := e.Store.Create(createCtx, record); err != nil {
 		return Record{}, err
 	}
 	for i, service := range serviceRecords {

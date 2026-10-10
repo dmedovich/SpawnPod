@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"crypto/tls"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -76,11 +77,11 @@ func TestCONNECTExactRoute(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer upstream.Close()
+	defer func() { _ = upstream.Close() }()
 	go func() {
 		connection, err := upstream.Accept()
 		if err == nil {
-			defer connection.Close()
+			defer func() { _ = connection.Close() }()
 			_, _ = connection.Write([]byte("tunnel"))
 		}
 	}()
@@ -97,13 +98,15 @@ func TestCONNECTExactRoute(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	_, _ = fmt.Fprintf(conn, "CONNECT git.example.com:%s HTTP/1.1\r\nHost: git.example.com:%s\r\n\r\n", port, port)
 	reader := bufio.NewReader(conn)
 	response, err := http.ReadResponse(reader, &http.Request{Method: http.MethodConnect})
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Close the tunnel connection before the body: CONNECT bodies read until EOF.
+	defer func() { _ = conn.Close(); _ = response.Body.Close() }()
 	if response.StatusCode != 200 {
 		t.Fatalf("CONNECT returned %d", response.StatusCode)
 	}
@@ -119,7 +122,7 @@ func TestCONNECTRejectsDifferentSNI(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer upstream.Close()
+	defer func() { _ = upstream.Close() }()
 	upstreamResult := make(chan error, 1)
 	go func() {
 		connection, err := upstream.Accept()
@@ -127,7 +130,7 @@ func TestCONNECTRejectsDifferentSNI(t *testing.T) {
 			upstreamResult <- err
 			return
 		}
-		defer connection.Close()
+		defer func() { _ = connection.Close() }()
 		_ = connection.SetReadDeadline(time.Now().Add(3 * time.Second))
 		var byteRead [1]byte
 		_, err = connection.Read(byteRead[:])
@@ -146,7 +149,7 @@ func TestCONNECTRejectsDifferentSNI(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer connection.Close()
+	defer func() { _ = connection.Close() }()
 	_ = connection.SetDeadline(time.Now().Add(4 * time.Second))
 	_, _ = fmt.Fprintf(connection, "CONNECT git.example.com:%s HTTP/1.1\r\nHost: git.example.com:%s\r\n\r\n", port, port)
 	reader := bufio.NewReader(connection)
@@ -154,12 +157,14 @@ func TestCONNECTRejectsDifferentSNI(t *testing.T) {
 	if err != nil || response.StatusCode != 200 {
 		t.Fatalf("CONNECT: %v, %v", response, err)
 	}
+	// Closing the connection first prevents Body.Close from draining a live tunnel.
+	defer func() { _ = connection.Close(); _ = response.Body.Close() }()
 	_, _ = connection.Write(clientHello(t, "other.example.com"))
 	var one [1]byte
 	if _, err := reader.Read(one[:]); err != io.EOF {
 		t.Fatalf("client tunnel did not close: %v", err)
 	}
-	if err := <-upstreamResult; err != io.EOF {
+	if err := <-upstreamResult; !errors.Is(err, io.EOF) {
 		t.Fatalf("upstream received data or stayed open: %v", err)
 	}
 }
@@ -180,19 +185,19 @@ func TestClientHelloSNI(t *testing.T) {
 func clientHello(t *testing.T, name string) []byte {
 	t.Helper()
 	client, peer := net.Pipe()
-	defer client.Close()
-	defer peer.Close()
+	defer func() { _ = client.Close() }()
+	defer func() { _ = peer.Close() }()
 	go func() {
 		_ = tls.Client(client, &tls.Config{ServerName: name, MinVersion: tls.VersionTLS12}).Handshake()
 	}()
 	_ = peer.SetReadDeadline(time.Now().Add(5 * time.Second))
-	header := make([]byte, 5)
-	if _, err := io.ReadFull(peer, header); err != nil {
+	var header [5]byte
+	if _, err := io.ReadFull(peer, header[:]); err != nil {
 		t.Fatal(err)
 	}
 	data := make([]byte, int(binary.BigEndian.Uint16(header[3:5])))
 	if _, err := io.ReadFull(peer, data); err != nil {
 		t.Fatal(err)
 	}
-	return append(header, data...)
+	return append(header[:], data...)
 }

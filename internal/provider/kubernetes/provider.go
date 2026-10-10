@@ -30,7 +30,7 @@ type Provider struct {
 
 func (p *Provider) validate() error {
 	if p == nil || p.Client == nil || p.Namespace == "" {
-		return errors.New("Kubernetes provider is not configured")
+		return errors.New("kubernetes provider is not configured")
 	}
 	return nil
 }
@@ -63,7 +63,7 @@ func (p *Provider) WaitReady(ctx context.Context, name string, uid types.UID) (*
 			return nil, err
 		}
 		if pod.UID != uid {
-			return nil, errors.New("Pod UID changed while waiting for readiness")
+			return nil, errors.New("pod UID changed while waiting for readiness")
 		}
 		for _, condition := range pod.Status.Conditions {
 			if condition.Type == corev1.PodReady && condition.Status == corev1.ConditionTrue {
@@ -88,7 +88,7 @@ func (p *Provider) RemoveJob(ctx context.Context, name string, uid types.UID) er
 		return err
 	}
 	if uid == "" {
-		return errors.New("Pod UID is required for deletion")
+		return errors.New("pod UID is required for deletion")
 	}
 	zero := int64(0)
 	err := p.Client.CoreV1().Pods(p.Namespace).Delete(ctx, name, metav1.DeleteOptions{Preconditions: &metav1.Preconditions{UID: &uid}, GracePeriodSeconds: &zero})
@@ -127,10 +127,10 @@ func (p *Provider) CancelCommand(ctx context.Context, name string, uid types.UID
 		return err
 	}
 	if p.Config == nil {
-		return errors.New("Kubernetes REST config is required for cancel")
+		return errors.New("kubernetes REST config is required for cancel")
 	}
 	if uid == "" || commandID == "" {
-		return errors.New("Pod UID and command ID are required")
+		return errors.New("pod UID and command ID are required")
 	}
 	if len(commandID) > 128 {
 		return errors.New("command ID is too long")
@@ -140,7 +140,7 @@ func (p *Provider) CancelCommand(ctx context.Context, name string, uid types.UID
 		return err
 	}
 	if pod.UID != uid {
-		return errors.New("Pod UID changed before cancel")
+		return errors.New("pod UID changed before cancel")
 	}
 	restReq := p.Client.CoreV1().RESTClient().Post().Resource("pods").Namespace(p.Namespace).Name(name).SubResource("exec")
 	restReq.VersionedParams(&corev1.PodExecOptions{Container: containerName, Command: []string{agentPath, "cancel", commandID}, Stdout: true, Stderr: true}, scheme.ParameterCodec)
@@ -178,10 +178,10 @@ func (p *Provider) Exec(ctx context.Context, name string, uid types.UID, req sup
 		return err
 	}
 	if p.Config == nil {
-		return errors.New("Kubernetes REST config is required for exec")
+		return errors.New("kubernetes REST config is required for exec")
 	}
 	if uid == "" {
-		return errors.New("Pod UID is required for exec")
+		return errors.New("pod UID is required for exec")
 	}
 	if onEvent == nil || req.Op != "run" {
 		return errors.New("invalid exec callback or operation")
@@ -191,10 +191,10 @@ func (p *Provider) Exec(ctx context.Context, name string, uid types.UID, req sup
 		return err
 	}
 	if pod.UID != uid {
-		return errors.New("Pod UID changed before exec")
+		return errors.New("pod UID changed before exec")
 	}
 	if pod.Status.Phase != corev1.PodRunning {
-		return fmt.Errorf("Pod is not running: %s", pod.Status.Phase)
+		return fmt.Errorf("pod is not running: %s", pod.Status.Phase)
 	}
 	payload, err := json.Marshal(req)
 	if err != nil {
@@ -219,7 +219,7 @@ func (p *Provider) Exec(ctx context.Context, name string, uid types.UID, req sup
 		_ = outputWriter.CloseWithError(err)
 		done <- err
 	}()
-	defer outputReader.Close()
+	defer func() { _ = outputReader.Close() }()
 	decoder := json.NewDecoder(outputReader)
 	terminal := false
 	var terminalError string

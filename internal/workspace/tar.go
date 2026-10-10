@@ -51,7 +51,7 @@ func EnsureLayout(mount string) error {
 	if err != nil {
 		return err
 	}
-	defer root.Close()
+	defer func() { _ = root.Close() }()
 	for _, name := range []string{".act", ".toolcache", ".tmp"} {
 		if err := ensureDirs(root, name); err != nil {
 			return err
@@ -72,7 +72,7 @@ func EnsureDirectory(mount, target string) error {
 	if err != nil {
 		return err
 	}
-	defer root.Close()
+	defer func() { _ = root.Close() }()
 	return ensureDirs(root, rel)
 }
 
@@ -150,7 +150,7 @@ func Extract(ctx context.Context, mount, dest string, input io.Reader) error {
 	if err != nil {
 		return err
 	}
-	defer root.Close()
+	defer func() { _ = root.Close() }()
 	if err := ensureDirs(root, rel); err != nil {
 		return err
 	}
@@ -187,7 +187,7 @@ func Extract(ctx context.Context, mount, dest string, input io.Reader) error {
 			return errors.New("duplicate archive entry")
 		}
 		seen[target] = struct{}{}
-		if hdr.Typeflag != tar.TypeReg && hdr.Typeflag != tar.TypeRegA && hdr.Typeflag != tar.TypeDir {
+		if hdr.Typeflag != tar.TypeReg && hdr.Typeflag != tar.TypeDir {
 			return errors.New("unsupported archive entry type")
 		}
 		if hdr.Size < 0 || hdr.Size > MaxFileBytes || total > MaxArchiveBytes-hdr.Size {
@@ -252,7 +252,7 @@ func Archive(ctx context.Context, mount, src string, output io.Writer) error {
 	if err != nil {
 		return err
 	}
-	defer root.Close()
+	defer func() { _ = root.Close() }()
 	if err := checkComponents(root, rel); err != nil {
 		return err
 	}

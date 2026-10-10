@@ -3,6 +3,8 @@ package controller
 import (
 	"bytes"
 	"context"
+	"errors"
+	"io"
 	"strings"
 	"testing"
 
@@ -66,6 +68,13 @@ func TestDoctorChecksControllerIdentityAndObservedPolicies(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "OK   RBAC create ci/pods/exec") || !strings.Contains(out.String(), "Doctor is read-only") {
 		t.Fatalf("missing diagnostic output: %s", out.String())
+	}
+	// A complete set of passing checks is not success if the report cannot be written.
+	reader, writer := io.Pipe()
+	_ = reader.CloseWithError(io.ErrClosedPipe)
+	defer func() { _ = writer.Close() }()
+	if err := Doctor(context.Background(), cfg, client, writer); !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("missing output failure: %v", err)
 	}
 	client.PrependReactor("create", "selfsubjectaccessreviews", func(action ktesting.Action) (bool, runtime.Object, error) {
 		review := action.(ktesting.CreateAction).GetObject().(*authorizationv1.SelfSubjectAccessReview).DeepCopy()

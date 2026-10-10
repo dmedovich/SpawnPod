@@ -48,7 +48,7 @@ func (r observedReconciler) ReconcileOnce(ctx context.Context) error {
 // namespace exists. Lease create/update permissions are tested by election.
 func Preflight(ctx context.Context, cfg config.Config, client kubernetes.Interface) error {
 	if client == nil {
-		return errors.New("Kubernetes client is nil")
+		return errors.New("kubernetes client is nil")
 	}
 	if _, err := client.CoreV1().ConfigMaps(cfg.Kubernetes.Namespace).List(ctx, metav1.ListOptions{Limit: 1}); err != nil {
 		return fmt.Errorf("list environment ConfigMaps: %w", err)
@@ -231,7 +231,7 @@ func Run(ctx context.Context, cfg config.Config, client kubernetes.Interface, re
 		return err
 	}
 	if client == nil || restConfig == nil {
-		return errors.New("Kubernetes client and REST config are required")
+		return errors.New("kubernetes client and REST config are required")
 	}
 	if logger == nil {
 		logger = slog.Default()
@@ -288,7 +288,7 @@ func Run(ctx context.Context, cfg config.Config, client kubernetes.Interface, re
 			return fmt.Errorf("listen monitor: %w", err)
 		}
 		monitor := &http.Server{Handler: metrics.Handler(), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: 10 * time.Second, IdleTimeout: 30 * time.Second}
-		defer monitor.Close()
+		defer func() { _ = monitor.Close() }()
 		go func() {
 			if err := monitor.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
 				reportFailure(fmt.Errorf("monitor: %w", err))
@@ -330,7 +330,7 @@ func Run(ctx context.Context, cfg config.Config, client kubernetes.Interface, re
 			go monitorAPI(leaderCtx, cfg, client, metrics)
 			logger.Info("serving Forgejo plugin", "socket", cfg.Controller.SocketPath)
 			if err := unixrpc.ServeWithOptions(leaderCtx, cfg.Controller.SocketPath, plugin, unixrpc.Options{Shutdown: ctx, DrainTimeout: drainTimeout, Metrics: metrics}); err != nil && leaderCtx.Err() == nil {
-				reportFailure(fmt.Errorf("Forgejo RPC server: %w", err))
+				reportFailure(fmt.Errorf("forgejo RPC server: %w", err))
 			}
 		}, OnStoppedLeading: func() { metrics.Serving(false); logger.Info("controller Lease released or lost") }},
 	})

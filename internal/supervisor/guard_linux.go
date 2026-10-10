@@ -22,7 +22,7 @@ func GuardCommand() error {
 	if status == nil {
 		return errors.New("command guard status pipe is missing")
 	}
-	defer status.Close()
+	defer func() { _ = status.Close() }()
 	fail := func(message string) error {
 		_, _ = io.WriteString(status, message)
 		return errors.New(message)
@@ -47,7 +47,7 @@ func GuardCommand() error {
 	if err != nil {
 		return fail("command failed to start")
 	}
-	defer null.Close()
+	defer func() { _ = null.Close() }()
 	if err := unix.Dup2(int(null.Fd()), 0); err != nil {
 		return fail("command failed to start")
 	}

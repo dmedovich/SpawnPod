@@ -9,12 +9,9 @@ runs commands, moves workspace files and cleans up Kubernetes resources.
 It is intended for operators who already use Kubernetes and want to decide
 exactly which images, resources and network access their CI jobs may use.
 
-**Status: v0.1.0-rc.2, Linux/amd64 release candidate.** The official Forgejo
-Runner integration has been tested locally, including private HTTPS checkout.
-The candidate includes fixes for process cleanup, output stalls, diagnostic
-disclosure and recovery, plus an opt-in local K3s acceptance suite.
-See the [validation report](docs/VALIDATION.md) and [security contract](docs/SECURITY.md)
-before using it for sensitive workloads. Target-server validation remains required.
+**Status: v0.1.0-rc.3, Linux/amd64 release candidate.** Tested locally with
+Forgejo Runner, including private HTTPS checkout. See the
+[validation results](docs/VALIDATION.md) and [security model](docs/SECURITY.md).
 
 ## How it works
 
@@ -43,7 +40,7 @@ and retry cleanup.
 SpawnPod supports **Forgejo Runner v13.1.0** and its experimental plugin
 protocol. It does not provide arbitrary Docker compatibility, privileged
 Docker-in-Docker, cross-job caches or a strong isolation boundary between
-hostile tenants sharing a node. See the [supported contract](docs/SPEC.md).
+hostile tenants sharing a node. See the [specification](docs/SPEC.md).
 
 ## Try it
 
@@ -65,17 +62,19 @@ make check
 ```
 
 The release scripts require clean, committed sources and write to `dist/`.
-They do not upload or deploy anything. The source declares Go 1.26 as its
-minimum; release validation uses the toolchain above.
+They do not upload or deploy anything. `go 1.26.0` in `go.mod` sets the
+minimum Go version; `toolchain go1.27.2` selects the preferred toolchain.
+With automatic selection enabled, Go downloads it if needed. See
+[Go toolchain selection](https://go.dev/doc/toolchain).
 
 ## Documentation
 
 - [Installation and operations](docs/INSTALL.md)
 - [Architecture and lifecycle](docs/ARCHITECTURE.md)
 - [Release specification](docs/SPEC.md)
-- [Security assumptions and hardening status](docs/SECURITY.md)
+- [Security model and installation requirements](docs/SECURITY.md)
 - [Validation and local K3s acceptance](docs/VALIDATION.md)
-- [Release process](docs/RELEASE.md) and [candidate release notes](docs/releases/v0.1.0-rc.2.md)
+- [Release process](docs/RELEASE.md) and [candidate release notes](docs/releases/v0.1.0-rc.3.md)
 
 ## Repository
 
@@ -83,13 +82,11 @@ minimum; release validation uses the toolchain above.
 |---|---|
 | `cmd/` | Controller, in-Pod agent and source proxy entry points |
 | `internal/` | Forgejo adapter, lifecycle engine, Kubernetes provider and supervisor |
-| `deploy/` | Installation templates and reproducible integration fixtures |
-| `scripts/` | Local release packaging |
+| `deploy/` | Installation manifests and runtime image recipe |
+| `tests/integration/` | K3s acceptance suite, workflow fixtures and test setup |
+| `scripts/` | Release packaging |
 | `docs/` | Maintained public documentation bundled with releases |
 
-Local credentials, development journals and review transcripts belong under
-`.local/`; release artifacts belong under `dist/`. Both are ignored by Git.
-The old development journal was moved out of the public source tree.
 
 Licensed under [Apache-2.0](LICENSE). The vendored Forgejo plugin schema retains
 its upstream MIT notice.

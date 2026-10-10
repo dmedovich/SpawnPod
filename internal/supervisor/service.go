@@ -41,8 +41,8 @@ func (s *ServiceServer) Serve(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	defer listener.Close()
-	defer os.Remove(s.Socket)
+	defer func() { _ = listener.Close() }()
+	defer func() { _ = os.Remove(s.Socket) }()
 	if err := os.Chmod(s.Socket, 0600); err != nil {
 		return err
 	}
@@ -93,7 +93,7 @@ func (s *ServiceServer) Serve(ctx context.Context) error {
 }
 
 func (s *ServiceServer) handle(ctx context.Context, conn net.Conn) {
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	var req Request
 	if err := json.NewDecoder(io.LimitReader(conn, 1<<20)).Decode(&req); err != nil {
 		_ = json.NewEncoder(conn).Encode(Event{Error: "invalid service request"})

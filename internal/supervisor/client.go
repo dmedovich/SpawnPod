@@ -15,7 +15,7 @@ func Run(ctx context.Context, socket string, req Request, onEvent func(Event) er
 	if err != nil {
 		return err
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	finished := make(chan struct{})
 	defer close(finished)
 	go func() {

@@ -152,7 +152,7 @@ func TestCreateAppliesProfileAndRejectsUnsupportedInputs(t *testing.T) {
 }
 
 func TestCreateMapsApprovedServicesAndTransientEnvironment(t *testing.T) {
-	s, backend, cfg := server(t)
+	_, backend, cfg := server(t)
 	approved := config.ServiceProfile{
 		Image:        "registry.example.com/redis@sha256:" + strings.Repeat("d", 64),
 		Command:      []string{"redis-server", "--port", "6379"},
@@ -164,8 +164,7 @@ func TestCreateMapsApprovedServicesAndTransientEnvironment(t *testing.T) {
 	profile := cfg.Profiles["default"]
 	profile.Services = map[string]config.ServiceProfile{"redis": approved}
 	cfg.Profiles["default"] = profile
-	var err error
-	s, err = New(backend, fakeRecords{}, cfg)
+	s, err := New(backend, fakeRecords{}, cfg)
 	if err != nil {
 		t.Fatal(err)
 	}

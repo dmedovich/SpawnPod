@@ -4,9 +4,3 @@ __pycache__/
 *.pyc
 dist/
 /spawnpodsdocs
-
-# Local tooling and development evidence
-.agents/
-.codex/
-.aws/
-spawnpod-docs/

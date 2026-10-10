@@ -35,7 +35,8 @@ func New(routes []Route) (*Proxy, error) {
 			return nil, errors.New("invalid source proxy host or port")
 		}
 		ip, err := netip.ParseAddr(route.Address)
-		if err != nil || ip.Zone() != "" || ip.IsUnspecified() || ip.IsMulticast() || !(publicAddress(ip) || route.AllowLoopback && ip.IsLoopback()) {
+		allowedAddress := publicAddress(ip) || route.AllowLoopback && ip.IsLoopback()
+		if err != nil || ip.Zone() != "" || ip.IsUnspecified() || ip.IsMulticast() || !allowedAddress {
 			return nil, fmt.Errorf("source proxy route %s: invalid or disallowed address", route.Host)
 		}
 		key := net.JoinHostPort(route.Host, strconv.Itoa(route.Port))
@@ -112,7 +113,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "source upstream unavailable", http.StatusBadGateway)
 		return
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	stripHopHeaders(resp.Header)
 	for key, values := range resp.Header {
 		for _, value := range values {
@@ -150,22 +151,22 @@ func (p *Proxy) connect(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "source upstream unavailable", http.StatusBadGateway)
 		return
 	}
-	defer upstream.Close()
+	defer func() { _ = upstream.Close() }()
 	client, rw, err := http.NewResponseController(w).Hijack()
 	if err != nil {
 		http.Error(w, "tunnel unavailable", http.StatusInternalServerError)
 		return
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 	if _, err := rw.WriteString("HTTP/1.1 200 Connection Established\r\n\r\n"); err != nil {
 		return
 	}
 	if err := rw.Flush(); err != nil {
 		return
 	}
-	header := make([]byte, 5)
+	var header [5]byte
 	_ = client.SetReadDeadline(time.Now().Add(10 * time.Second))
-	if _, err := io.ReadFull(rw, header); err != nil || header[0] != 22 || header[1] != 3 {
+	if _, err := io.ReadFull(rw, header[:]); err != nil || header[0] != 22 || header[1] != 3 {
 		return
 	}
 	length := int(binary.BigEndian.Uint16(header[3:5]))
@@ -180,7 +181,7 @@ func (p *Proxy) connect(w http.ResponseWriter, r *http.Request) {
 	if sni, ok := clientHelloSNI(first); !ok || sni != host {
 		return
 	}
-	if _, err := upstream.Write(append(header, first...)); err != nil {
+	if _, err := upstream.Write(append(header[:], first...)); err != nil {
 		return
 	}
 	_ = client.SetDeadline(time.Now().Add(30 * time.Minute))

@@ -10,7 +10,7 @@ import (
 
 func TestDrainExecOutputConsumesLargeTrailingFrame(t *testing.T) {
 	reader, writer := io.Pipe()
-	defer reader.Close()
+	defer func() { _ = reader.Close() }()
 	done := make(chan error, 1)
 	go func() {
 		_, err := io.WriteString(writer, `{"exit_code":0}`+"\n"+strings.Repeat("x", 256<<10))

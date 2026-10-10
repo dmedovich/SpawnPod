@@ -9,13 +9,13 @@ mkdir -p "$local_dir/bin"
 
 (cd "$repo_root" && env TMPDIR=/var/tmp go build -o "$local_dir/bin/spawnpod" ./cmd/spawnpod)
 (cd "$repo_root" && env TMPDIR=/var/tmp go build -o "$local_dir/bin/spawnpod-agent" ./cmd/spawnpod-agent)
-(cd "$repo_root" && env TMPDIR=/var/tmp go build -o "$local_dir/bin/spawnpod-recovery-client" ./deploy/smoke/recovery-client.go)
-runner_source=${SPAWNPOD_RUNNER_SOURCE:-/home/dmedovich/runner-main/runner}
-if [ -f "$runner_source/go.mod" ]; then
+(cd "$repo_root" && env TMPDIR=/var/tmp go build -o "$local_dir/bin/spawnpod-recovery-client" ./tests/integration/recovery-client.go)
+runner_source=${SPAWNPOD_RUNNER_SOURCE:-}
+if [ -n "$runner_source" ] && [ -f "$runner_source/go.mod" ]; then
   (cd "$runner_source" && env TMPDIR=/var/tmp go build -o "$local_dir/bin/forgejo-runner" .)
 fi
 
-podman build -f "$repo_root/deploy/agent.Dockerfile" -t localhost/spawnpod-agent:smoke "$repo_root"
+podman build -f "$repo_root/tests/integration/agent.Dockerfile" -t localhost/spawnpod-agent:smoke "$repo_root"
 podman pull docker.io/library/alpine:3.22
 podman save --format oci-archive --output "$local_dir/spawnpod-agent.oci.tar" localhost/spawnpod-agent:smoke
 

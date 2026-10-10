@@ -53,7 +53,7 @@ func (a *EngineJobs) FindJob(ctx context.Context, name string) (engine.JobHandle
 	}
 	id := strings.TrimPrefix(name, "sp-")
 	if name != "sp-"+id || !idPattern.MatchString(id) || pod.Labels[ownerLabel] != "true" || pod.Labels[environmentLabel] != id {
-		return engine.JobHandle{}, errors.New("Pod ownership mismatch")
+		return engine.JobHandle{}, errors.New("pod ownership mismatch")
 	}
 	return engine.JobHandle{Name: pod.Name, UID: string(pod.UID)}, nil
 }

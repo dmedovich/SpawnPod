@@ -36,17 +36,17 @@ func (p *Provider) transferContainer(ctx context.Context, handle engine.JobHandl
 		return err
 	}
 	if p.Config == nil || handle.UID == "" {
-		return errors.New("Kubernetes REST config and Pod UID are required")
+		return errors.New("kubernetes REST config and Pod UID are required")
 	}
 	pod, err := p.Client.CoreV1().Pods(p.Namespace).Get(ctx, handle.Name, metav1.GetOptions{})
 	if err != nil {
 		return err
 	}
 	if pod.UID != types.UID(handle.UID) {
-		return errors.New("Pod UID changed before file transfer")
+		return errors.New("pod UID changed before file transfer")
 	}
 	if pod.Status.Phase != corev1.PodRunning {
-		return fmt.Errorf("Pod is not running: %s", pod.Status.Phase)
+		return fmt.Errorf("pod is not running: %s", pod.Status.Phase)
 	}
 	restReq := p.Client.CoreV1().RESTClient().Post().Resource("pods").Namespace(p.Namespace).Name(handle.Name).SubResource("exec")
 	restReq.VersionedParams(&corev1.PodExecOptions{Container: targetContainer, Command: command, Stdin: stdin != nil, Stdout: true, Stderr: true, TTY: false}, scheme.ParameterCodec)

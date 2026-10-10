@@ -68,7 +68,7 @@ func TestSuccessfulStepKillsInheritedBackgroundChild(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer syscall.Kill(pid, syscall.SIGKILL)
+	defer func() { _ = syscall.Kill(pid, syscall.SIGKILL) }()
 	deadline := time.Now().Add(time.Second)
 	for {
 		data, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/stat")
@@ -90,7 +90,7 @@ func TestStalledReaderReleasesSlotAndAllowsNextCommand(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	if err := json.NewEncoder(conn).Encode(Request{Op: "run", ID: "blocked", Argv: []string{"sh", "-c", "head -c 4194304 /dev/zero"}, TimeoutMillis: 50}); err != nil {
 		t.Fatal(err)
 	}
@@ -150,7 +150,7 @@ func TestRequestTrailingWhitespaceDoesNotCancelCommand(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	request := Request{Op: "run", ID: "framing", Argv: []string{"sh", "-c", "sleep 0.02; exit 0"}, TimeoutMillis: 1000}
 	payload, err := json.Marshal(request)
 	if err != nil {

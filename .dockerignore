@@ -2,8 +2,3 @@
 .local
 dist
 **/__pycache__
-
-.agents
-.codex
-.aws
-spawnpod-docs

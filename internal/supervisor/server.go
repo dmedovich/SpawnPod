@@ -49,8 +49,8 @@ func (s *Server) Serve(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	defer ln.Close()
-	defer os.Remove(s.Socket)
+	defer func() { _ = ln.Close() }()
+	defer func() { _ = os.Remove(s.Socket) }()
 	if err := os.Chmod(s.Socket, 0600); err != nil {
 		return err
 	}
@@ -73,7 +73,7 @@ func (s *Server) Serve(ctx context.Context) error {
 }
 
 func (s *Server) handle(parent context.Context, conn net.Conn) {
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
 	stopParent := context.AfterFunc(parent, func() { _ = conn.SetDeadline(time.Now()) })
 	defer stopParent()
@@ -205,8 +205,8 @@ func (s *Server) run(ctx context.Context, req Request, emit func(Event) error) {
 		_ = emit(Event{Error: "command isolation unavailable"})
 		return
 	}
-	defer statusReader.Close()
-	defer statusWriter.Close()
+	defer func() { _ = statusReader.Close() }()
+	defer func() { _ = statusWriter.Close() }()
 	cmd := exec.Command(executable, "command-guard")
 	cmd.Dir = req.Dir
 	cmd.Stdin = bytes.NewReader(payload)

@@ -32,7 +32,7 @@ func Run(ctx context.Context, socket, image, profile string, out io.Writer) (run
 	if err != nil {
 		return err
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	client := pb.NewBackendPluginClient(conn)
 	if _, err := client.Capabilities(ctx, &pb.CapabilitiesRequest{}); err != nil {
 		return fmt.Errorf("Capabilities: %w", err)
@@ -45,7 +45,6 @@ func Run(ctx context.Context, socket, image, profile string, out io.Writer) (run
 	if id == "" {
 		return errors.New("Create returned no environment ID; inspect records before retrying")
 	}
-	fmt.Fprintf(out, "created environment %s\n", id)
 	defer func() {
 		cleanupCtx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 		defer cancel()
@@ -53,9 +52,14 @@ func Run(ctx context.Context, socket, image, profile string, out io.Writer) (run
 		if err != nil {
 			runErr = errors.Join(runErr, fmt.Errorf("Remove %s: %w", id, err))
 		} else {
-			fmt.Fprintf(out, "removed environment %s\n", id)
+			if _, err := fmt.Fprintf(out, "removed environment %s\n", id); err != nil {
+				runErr = errors.Join(runErr, fmt.Errorf("write smoke report: %w", err))
+			}
 		}
 	}()
+	if _, err := fmt.Fprintf(out, "created environment %s\n", id); err != nil {
+		return fmt.Errorf("write smoke report: %w", err)
+	}
 	started, err := client.Start(ctx, &pb.StartRequest{EnvironmentId: id})
 	if err != nil {
 		return fmt.Errorf("Start: %w", err)
@@ -76,7 +80,9 @@ func Run(ctx context.Context, socket, image, profile string, out io.Writer) (run
 	if !completed {
 		return errors.New("Start ended without StartComplete")
 	}
-	fmt.Fprintln(out, "job Pod ready")
+	if _, err := fmt.Fprintln(out, "job Pod ready"); err != nil {
+		return fmt.Errorf("write smoke report: %w", err)
+	}
 	archive, err := smokeArchive()
 	if err != nil {
 		return err
@@ -98,8 +104,8 @@ func Run(ctx context.Context, socket, image, profile string, out io.Writer) (run
 	if err := copyOut(ctx, client, id); err != nil {
 		return err
 	}
-	fmt.Fprintln(out, "file transfer and command execution passed")
-	return nil
+	_, err = fmt.Fprintln(out, "file transfer and command execution passed")
+	return err
 }
 
 func smokeArchive() ([]byte, error) {
@@ -177,12 +183,18 @@ func copyOut(ctx context.Context, client pb.BackendPluginClient, id string) erro
 	}
 	reader := tar.NewReader(&buffer)
 	header, err := reader.Next()
-	if err != nil || header == nil || header.Name != "smoke.txt" {
-		return fmt.Errorf("CopyOut archive has unexpected entry: %v", err)
+	if err != nil {
+		return fmt.Errorf("read copy-out archive: %w", err)
+	}
+	if header == nil || header.Name != "smoke.txt" {
+		return errors.New("copy-out archive has unexpected entry")
 	}
 	data, err := io.ReadAll(reader)
-	if err != nil || string(data) != marker {
-		return fmt.Errorf("CopyOut content differs from expected marker: %v", err)
+	if err != nil {
+		return fmt.Errorf("read copy-out content: %w", err)
+	}
+	if string(data) != marker {
+		return errors.New("copy-out content differs from expected marker")
 	}
 	if _, err := reader.Next(); !errors.Is(err, io.EOF) {
 		return errors.New("CopyOut archive has extra entries")

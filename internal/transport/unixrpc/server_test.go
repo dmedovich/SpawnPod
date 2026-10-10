@@ -56,7 +56,7 @@ func TestServeHealthAndCapabilities(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	requestCtx, stop := context.WithTimeout(context.Background(), time.Second)
 	defer stop()
 	health, err := grpc_health_v1.NewHealthClient(conn).Check(requestCtx, &grpc_health_v1.HealthCheckRequest{})
@@ -123,7 +123,7 @@ func TestServeRunnerKeepalive(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	watchCtx, stop := context.WithTimeout(t.Context(), 100*time.Second)
 	defer stop()
 	stream, err := grpc_health_v1.NewHealthClient(conn).Watch(watchCtx, &grpc_health_v1.HealthCheckRequest{}, grpc.WaitForReady(true))

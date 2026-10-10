@@ -27,7 +27,7 @@ func BuildSourceProxyPolicy(ip netip.Addr, port int32) (*networkingv1.NetworkPol
 	protocol := corev1.ProtocolTCP
 	value := intstr.FromInt32(port)
 	return &networkingv1.NetworkPolicy{
-		TypeMeta: metav1.TypeMeta{APIVersion: "networking.k8s.io/v1", Kind: "NetworkPolicy"},
+		TypeMeta:   metav1.TypeMeta{APIVersion: "networking.k8s.io/v1", Kind: "NetworkPolicy"},
 		ObjectMeta: metav1.ObjectMeta{Name: SourceProxyPolicyName},
 		Spec: networkingv1.NetworkPolicySpec{
 			PodSelector: metav1.LabelSelector{MatchLabels: map[string]string{ownerLabel: "true", networkLabel: "source"}},

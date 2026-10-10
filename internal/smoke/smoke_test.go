@@ -3,6 +3,7 @@ package smoke
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"net"
 	"path/filepath"
@@ -36,7 +37,7 @@ func (*fakePlugin) Start(_ *pb.StartRequest, stream grpc.ServerStreamingServer[p
 func (f *fakePlugin) CopyIn(stream grpc.ClientStreamingServer[pb.CopyInChunk, pb.CopyInResponse]) error {
 	for {
 		chunk, err := stream.Recv()
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			return stream.SendAndClose(&pb.CopyInResponse{})
 		}
 		if err != nil {
@@ -86,6 +87,17 @@ func TestSmokeRunsProtocolAndRemovesEnvironment(t *testing.T) {
 	}
 	if !plugin.removed || !strings.Contains(out.String(), "file transfer and command execution passed") {
 		t.Fatalf("smoke did not finish and clean up: %s", out.String())
+	}
+	// A broken output pipe must report failure and still remove the created job.
+	plugin.removed = false
+	reader, writer := io.Pipe()
+	_ = reader.CloseWithError(io.ErrClosedPipe)
+	defer func() { _ = writer.Close() }()
+	if err := Run(context.Background(), socket, "example@sha256:"+strings.Repeat("a", 64), "default", writer); !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("missing output failure: %v", err)
+	}
+	if !plugin.removed {
+		t.Fatal("output failure skipped environment cleanup")
 	}
 	cancel()
 	if err := <-done; err != nil {

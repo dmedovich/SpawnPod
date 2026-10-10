@@ -47,7 +47,7 @@ func TestDrainCompletesOrCancelsActiveRPCWithinBudget(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer conn.Close()
+			defer func() { _ = conn.Close() }()
 			rpcCtx, cancel := context.WithTimeout(t.Context(), 4*time.Second)
 			defer cancel()
 			result := make(chan error, 1)
@@ -73,9 +73,10 @@ func TestDrainCompletesOrCancelsActiveRPCWithinBudget(t *testing.T) {
 				t.Fatalf("RPC aborted before drain budget: %v", err)
 			case <-time.After(20 * time.Millisecond):
 			}
-			if mode == "complete" {
+			switch mode {
+			case "complete":
 				close(p.release)
-			} else if mode == "lease-loss" {
+			case "lease-loss":
 				loseLease()
 			}
 			select {

@@ -166,7 +166,7 @@ func (c *cluster) install(t *testing.T) {
 			t.Error(err)
 		}
 	})
-	security, err := os.ReadFile("../../deploy/security.yaml")
+	security, err := os.ReadFile("../../../deploy/security.yaml")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -463,7 +463,7 @@ func (c *cluster) capacity(t *testing.T) {
 			}
 		}
 	}()
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		record, err := client.Create(ctx, &pb.CreateRequest{Name: "capacity", Image: c.cfg.Profiles["default"].Image, BackendOptions: map[string]string{"profile": "default"}, EnvironmentTimeout: durationpb.New(10 * time.Minute)})
 		if err != nil {
 			t.Fatal(err)
@@ -540,7 +540,7 @@ func (c *cluster) capacity(t *testing.T) {
 	if err != nil {
 		t.Error(err)
 	}
-	report := append([]byte(fmt.Sprintf("CONCURRENCY=3; NODE workload; per-job CPU limit=500m; memory limit=256Mi\nController average CPU during load: %.4f cores over %.1fs\n", (c.cpuSeconds(t)-idleCPU)/time.Since(loadStart).Seconds(), time.Since(loadStart).Seconds())), metrics...)
+	report := append(fmt.Appendf(nil, "CONCURRENCY=3; NODE workload; per-job CPU limit=500m; memory limit=256Mi\nController average CPU during load: %.4f cores over %.1fs\n", (c.cpuSeconds(t)-idleCPU)/time.Since(loadStart).Seconds(), time.Since(loadStart).Seconds()), metrics...)
 	report = append(report, []byte("\nCONTROLLER IDLE\n")...)
 	report = append(report, idle...)
 	report = append(report, []byte("\nCONTROLLER UNDER LOAD\n")...)
@@ -647,12 +647,18 @@ func (c *cluster) startController(t *testing.T, binary, label string) func() {
 	command.Stdout = log
 	command.Stderr = log
 	if err := command.Start(); err != nil {
-		log.Close()
+		_ = log.Close()
 		t.Fatal(err)
 	}
 	c.controllerProcess = command.Process
 	done := make(chan error, 1)
-	go func() { done <- command.Wait(); log.Close() }()
+	go func() {
+		err := command.Wait()
+		if closeErr := log.Close(); closeErr != nil {
+			t.Errorf("close controller log: %v", closeErr)
+		}
+		done <- err
+	}()
 	var once sync.Once
 	stop := func() {
 		once.Do(func() {
@@ -671,7 +677,7 @@ func (c *cluster) startController(t *testing.T, binary, label string) func() {
 	for {
 		conn, err := net.DialTimeout("unix", c.cfg.Controller.SocketPath, 50*time.Millisecond)
 		if err == nil {
-			conn.Close()
+			_ = conn.Close()
 			return stop
 		}
 		select {
@@ -695,7 +701,7 @@ func (c *cluster) rpc(t *testing.T) pb.BackendPluginClient {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { conn.Close() })
+	t.Cleanup(func() { _ = conn.Close() })
 	return pb.NewBackendPluginClient(conn)
 }
 

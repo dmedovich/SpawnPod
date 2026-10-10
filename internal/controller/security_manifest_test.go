@@ -14,7 +14,7 @@ func TestSecurityManifestKeepsWorkloadPermissionsScoped(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	decoder := yaml.NewDecoder(file)
 	seen := map[string]bool{}
 	for {

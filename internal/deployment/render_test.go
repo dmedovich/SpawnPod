@@ -2,6 +2,7 @@ package deployment
 
 import (
 	"bytes"
+	"errors"
 	"github.com/dmedovich/spawnpod/internal/config"
 	"io"
 	appsv1 "k8s.io/api/apps/v1"
@@ -76,7 +77,7 @@ func TestInstallationIsCredentialSeparatedAndRestartSafe(t *testing.T) {
 	if svc.Spec.Type != corev1.ServiceTypeClusterIP {
 		t.Fatal("monitor publicly exposed")
 	}
-	if err = decoder.Decode(&svc); err != io.EOF {
+	if err = decoder.Decode(&svc); !errors.Is(err, io.EOF) {
 		t.Fatalf("unexpected extra document: %v", err)
 	}
 	if _, err = Render(cfg, "runtime:latest", image); err == nil {
