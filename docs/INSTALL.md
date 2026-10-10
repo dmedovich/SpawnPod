@@ -24,8 +24,9 @@ cluster. Review the [security model](SECURITY.md) and
 
 ## Verify the downloaded package
 
-Download the architecture archive, OCI archive, `IMAGE_DIGEST` and `SHA256SUMS`
-from the same release. Run these commands from the download directory.
+Download `SHA256SUMS` and every file it lists from the same release. Choose
+the archive for your host architecture. Run these commands from the download
+directory (amd64 shown).
 
 ```sh
 sha256sum -c SHA256SUMS
@@ -37,15 +38,20 @@ sha256sum -c BINARY_SHA256SUMS
 ./spawnpod-source-proxy version
 ```
 
-All three commands should print `v0.1.0-rc.3`. Checksums detect corruption;
-this candidate does not supply a detached signature or signing identity.
+All three commands should print `v0.1.0-rc.3`. Checksums detect corruption.
+The existing rc.3 candidate does not supply a detached signature. Archives
+created by the current tag workflow have GitHub build and SBOM attestations;
+verify one with `gh attestation verify ARCHIVE -R dmedovich/SpawnPod`.
 `release.json` identifies the source revision and whether it was dirty. Published packages must have
 `dirty: false`.
 
 ## Prepare runtime and Runner images
 
-The release can include a runtime OCI archive. Alternatively build it from
-this extracted package and push to your own registry:
+Releases built by the current tag workflow publish a multi-platform runtime
+image at `ghcr.io/dmedovich/spawnpod:VERSION`. `GHCR_DIGEST` records its
+immutable reference, which is signed using GitHub OIDC and carries SBOM and
+provenance attestations. See [release verification](RELEASE.md#publish).
+Alternatively build from this extracted package and push to your own registry:
 
 ```sh
 podman build --build-arg VERSION=v0.1.0-rc.3 \

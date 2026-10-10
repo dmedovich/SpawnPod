@@ -30,5 +30,5 @@ manifest=index['manifests']
 if len(manifest)!=1:raise SystemExit('expected one image manifest')
 pathlib.Path(sys.argv[2]).write_text('localhost/spawnpod@'+manifest[0]['digest']+'\n')
 PY
-(cd "$release_root" && sha256sum "$release_package.tar.gz" "$release_package.oci.tar" IMAGE_DIGEST > SHA256SUMS)
+(cd "$release_root" && sha256sum spawnpod_"$release_version"_linux_*.tar.gz "$release_package.oci.tar" IMAGE_DIGEST > SHA256SUMS)
 printf 'Prepared image and complete SHA256SUMS under %s.\n' "$release_root"

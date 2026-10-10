@@ -1,6 +1,8 @@
 # Release process
 
-Supported platform: Linux/amd64. The current version is recorded in `VERSION`.
+Release artifacts target Linux/amd64 and Linux/arm64. The current version is
+recorded in `VERSION`. ARM64 needs execution tests on target hardware before
+it is considered a validated deployment platform.
 
 ## Prepare the source
 
@@ -24,14 +26,16 @@ Use Go 1.27.2, Podman and a clean working tree:
 
 ```sh
 make release
+./scripts/release.sh "$(cat VERSION)" arm64
 ./scripts/release-image.sh
+bash ./scripts/verify-release.sh
 ```
 
 The scripts write to `dist/VERSION/`. They produce:
 
-- A Linux/amd64 archive with three static binaries, binary checksums,
+- Linux/amd64 and Linux/arm64 archives with three static binaries, binary checksums,
   `release.json`, dependency inventory, licenses, documentation and manifests.
-- A runtime OCI archive and `IMAGE_DIGEST`.
+- A local Linux/amd64 runtime OCI archive and `IMAGE_DIGEST`.
 - `SHA256SUMS` covering the distribution files.
 
 Verify the checksums, binary versions and source revision in `release.json`.
@@ -45,8 +49,13 @@ The packaging scripts do not upload artifacts or install into a cluster.
 
 ## Publish
 
-The tag-triggered `.github/workflows/release.yml` runs the checks, builds the
-packages and creates a GitHub prerelease with the release notes and assets.
+The tag-triggered `.github/workflows/release.yml` runs the checks, builds and
+verifies both archives, and pushes a multi-platform runtime image to
+`ghcr.io/dmedovich/spawnpod:VERSION`. The image carries SPDX SBOM and SLSA
+provenance attestations and a keyless Cosign signature. GitHub Releases receives
+both archives, their SPDX SBOMs, checksums, the local amd64 OCI archive and
+`GHCR_DIGEST`. GitHub artifact attestations bind archives to their build
+provenance and SBOMs. Candidate versions create prereleases.
 For a new version, tag the reviewed commit after checking that `VERSION`
 and the release notes match:
 
@@ -58,7 +67,16 @@ git push origin "$release_version"
 
 Keep existing release tags unchanged. Do not also run `gh release create`:
 the workflow creates the release. Download the uploaded assets, verify
-`SHA256SUMS` and compare their provenance with the tagged revision.
+`SHA256SUMS` and compare their provenance with the tagged revision. Verify an
+archive with `gh attestation verify ARCHIVE -R dmedovich/SpawnPod`. Verify the
+image reference recorded in `GHCR_DIGEST` with:
+
+```sh
+release_version=v0.1.0-rc.3 # replace with the downloaded release tag
+cosign verify "$(cat GHCR_DIGEST)" \
+  --certificate-identity "https://github.com/dmedovich/SpawnPod/.github/workflows/release.yml@refs/tags/$release_version" \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+```
 
 ## Before expanding support
 
@@ -69,5 +87,5 @@ Exercise eviction, OOM, storage exhaustion and API outages under that load.
 Validate the job image, HTTPS trust and source-proxy routes.
 
 ARM64 requires execution tests on real hardware before adding it as a
-supported platform. HA, running-job migration and hostile tenant isolation
+validated platform. HA, running-job migration and hostile tenant isolation
 are outside the current [specification](SPEC.md).
