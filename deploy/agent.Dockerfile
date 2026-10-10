@@ -1,6 +1,6 @@
 # Build with Docker Buildx for linux/amd64 and linux/arm64, then pin the
 # published image by digest in the operator-owned profile.
-FROM --platform=$BUILDPLATFORM golang:1.25-alpine AS build
+FROM --platform=$BUILDPLATFORM golang:1.27.2-alpine AS build
 ARG TARGETOS=linux
 ARG TARGETARCH=amd64
 WORKDIR /src

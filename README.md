@@ -1,45 +1,62 @@
 # SpawnPod
 
-SpawnPod is a Kubernetes execution backend for **Forgejo Runner v13.1.0**.
-It provisions bounded non-root job environments, supervises commands, streams
-results, transfers workspace files and reconciles cleanup after interruptions.
-Forgejo Runner controls workflow execution; SpawnPod controls the permitted
-execution environment.
+Run Forgejo Actions jobs in Kubernetes Pods, without a Docker daemon.
 
-**Current version: v0.1.0-rc.1 — Linux/amd64 release candidate.** Local K3s
-and official-Runner integration tests passed, including private HTTPS
-`actions/checkout@v4`. Production hardware capacity, real ARM64 execution and
-future-version upgrade compatibility remain separate gates.
+SpawnPod plugs into the official Forgejo Runner. The Runner reads your workflow
+and decides which steps to execute; SpawnPod creates the job environment,
+runs commands, moves workspace files and cleans up Kubernetes resources.
 
-- [Release specification](docs/SPEC.md): shipped contract and limitations.
-- [Installation and operations](docs/INSTALL.md): binaries, images, manifests,
-  credentials, verification, upgrades and rollback.
-- [Release notes](docs/releases/v0.1.0-rc.1.md) and [release checklist](docs/RELEASE.md).
-- [Architecture and implementation evidence](spawnpod-docs/README.md): full
-  target PRD, decisions and dated live-test journal. The PRD is broader than
-  this candidate's supported scope.
+It is intended for operators who already use Kubernetes and want to decide
+exactly which images, resources and network access their CI jobs may use.
 
-## What is included
+**Status: v0.1.0-rc.2, Linux/amd64 release candidate.** The official Forgejo
+Runner integration has been tested locally, including private HTTPS checkout.
+The candidate includes fixes for process cleanup, output stalls, diagnostic
+disclosure and recovery, plus an opt-in local K3s acceptance suite.
+See the [validation report](docs/VALIDATION.md) and [security contract](docs/SECURITY.md)
+before using it for sensitive workloads. Target-server validation remains required.
 
-- Strict execution profiles with pinned images and resource/deadline caps.
-- Reusable per-environment workspaces, command output/exit status, cancellation
-  and bounded rooted tar transfer.
-- Durable ConfigMap records, UID-scoped resource ownership, Lease election
-  and reconciliation after controller/API/resource failures.
-- Generated admission, namespace RBAC/quotas and default-deny policies;
-  gated approved service containers and explicit HTTP(S) source egress.
-- A private Unix gRPC adapter, readiness/liveness, low-cardinality metrics,
-  bounded RPC drain, diagnostic commands and installation renderer.
-- Versioned static binaries, a scratch runtime image recipe, checksums and
-  dependency inventory. The official Runner is installed separately.
+## How it works
 
-The job image supplies its own shell/tools. Privileged Docker-in-Docker,
-unsafe mounts, arbitrary images/users and unrestricted internet access are
-unsupported. Job Pods share the host kernel; see [security assumptions](docs/SPEC.md#security-assumptions).
+```text
+Forgejo → official Runner → SpawnPod → Kubernetes job Pod
+                             │         ├─ workspace
+                             │         └─ process supervisor
+                             └─ approved service Pods
+```
 
-## Local build
+The Runner and controller communicate over a private Unix socket. The
+controller has a restricted Kubernetes identity. Job Pods have no Kubernetes
+API token, run as a fixed non-root user and use approved images pinned by digest.
+State is kept in ConfigMaps so a restarted controller can find interrupted work
+and retry cleanup.
 
-Source minimum: Go 1.25 or newer; the candidate is built/tested with Go 1.27.1.
+## What you get
+
+- Execution profiles with image allowlists, CPU/RAM/storage limits and deadlines.
+- A workspace shared between a job's steps, streamed output and file transfer.
+- Optional approved service containers and controlled source-network access.
+- Generated admission policy, RBAC, quotas and default-deny NetworkPolicies.
+- Recovery reconciliation, health/readiness endpoints and Prometheus metrics.
+- Static binaries, an OCI runtime image and release checksums.
+
+SpawnPod supports **Forgejo Runner v13.1.0** and its experimental plugin
+protocol. It does not provide arbitrary Docker compatibility, privileged
+Docker-in-Docker, cross-job caches or a strong isolation boundary between
+hostile tenants sharing a node. See the [supported contract](docs/SPEC.md).
+
+## Try it
+
+You need a Linux/amd64 Kubernetes test cluster with enforcing NetworkPolicy,
+stable ValidatingAdmissionPolicy, a registered Forgejo Runner and a suitable
+job image containing your workflow's tools. Node-based actions need Node in
+that image; the SpawnPod runtime image contains only the SpawnPod binaries.
+
+Start with the [installation guide](docs/INSTALL.md). It covers package
+verification, approved image digests, policy installation and Runner setup.
+The sample configuration has placeholder digests and must be edited first.
+
+To build from source with the release-tested Go 1.27.2 toolchain:
 
 ```sh
 make check
@@ -47,37 +64,32 @@ make check
 ./scripts/release-image.sh
 ```
 
-The release builder requires committed sources. For a local preview only,
-use `SPAWNPOD_ALLOW_DIRTY=1 ./scripts/release.sh`; provenance then records
-`dirty: true`. Image export uses Podman. Neither script publishes or deploys.
-GitHub's tag-triggered workflow runs checks and publishes candidate artifacts.
+The release scripts require clean, committed sources and write to `dist/`.
+They do not upload or deploy anything. The source declares Go 1.26 as its
+minimum; release validation uses the toolchain above.
 
-```sh
-go run ./cmd/spawnpod validate --config deploy/config.example.yaml
-go run ./cmd/spawnpod render-admission --config deploy/config.example.yaml
-```
+## Documentation
 
-The example contains placeholder image digests and budgets. Replace them
-with approved images and measured limits before installation. Follow
-[INSTALL.md](docs/INSTALL.md) for the operator-created Runner Secret and
-in-cluster deployment. The controller's Kubernetes token is mounted only in
-the controller container; Runner and job Pods receive no Kubernetes token.
+- [Installation and operations](docs/INSTALL.md)
+- [Architecture and lifecycle](docs/ARCHITECTURE.md)
+- [Release specification](docs/SPEC.md)
+- [Security assumptions and hardening status](docs/SECURITY.md)
+- [Validation and local K3s acceptance](docs/VALIDATION.md)
+- [Release process](docs/RELEASE.md) and [candidate release notes](docs/releases/v0.1.0-rc.2.md)
 
-## Code map
+## Repository
 
-| Path | Role |
+| Directory | Contents |
 |---|---|
-| `cmd/spawnpod` | Controller, configuration/rendering, diagnostics and smoke CLI |
-| `cmd/spawnpod-agent`, `internal/supervisor` | In-Pod process supervision and cancellation |
-| `internal/workspace` | Rooted, bounded file transfer |
-| `internal/engine` | Lifecycle, ordering, durable state and recovery |
-| `internal/provider/kubernetes` | Job/service resources, exec transport and ConfigMap store |
-| `internal/adapter/forgejo` | Pinned protocol, validation and RPC mapping |
-| `internal/config`, `internal/admission` | Operator policy and generated admission/quotas |
-| `internal/controller`, `internal/transport/unixrpc` | Preflight, Lease, reconciliation and private serving |
-| `internal/telemetry`, `internal/deployment` | Probes/metrics and installation rendering |
-| `cmd/spawnpod-source-proxy`, `internal/sourceproxy` | Explicit HTTP(S) routes and TLS SNI validation |
-| `deploy/smoke` | Development-only fixtures and live verification scenarios |
+| `cmd/` | Controller, in-Pod agent and source proxy entry points |
+| `internal/` | Forgejo adapter, lifecycle engine, Kubernetes provider and supervisor |
+| `deploy/` | Installation templates and reproducible integration fixtures |
+| `scripts/` | Local release packaging |
+| `docs/` | Maintained public documentation bundled with releases |
 
-Licensed under [Apache-2.0](LICENSE). The copied Forgejo plugin schema and
-generated types retain their upstream MIT notice.
+Local credentials, development journals and review transcripts belong under
+`.local/`; release artifacts belong under `dist/`. Both are ignored by Git.
+The old development journal was moved out of the public source tree.
+
+Licensed under [Apache-2.0](LICENSE). The vendored Forgejo plugin schema retains
+its upstream MIT notice.

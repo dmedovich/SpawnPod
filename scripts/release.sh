@@ -20,7 +20,10 @@ release_revision=$(git rev-parse HEAD)
 release_epoch=$(git show -s --format=%ct HEAD)
 release_root="dist/$release_version"
 release_package="spawnpod_${release_version}_linux_amd64"
-release_stage="$release_root/$release_package"
+mkdir -p "$release_root"
+release_work=$(mktemp -d "$release_root/.build.XXXXXX")
+trap 'rm -rf "$release_work"' EXIT
+release_stage="$release_work/$release_package"
 mkdir -p "$release_stage"
 for component in spawnpod spawnpod-agent spawnpod-source-proxy; do
   env CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -buildvcs=false -trimpath \
@@ -35,6 +38,7 @@ cp -R deploy/release "$release_stage/deploy/"
 install -m 0644 "$(go env GOROOT)/LICENSE" "$release_stage/third-party/Go-LICENSE"
 cp internal/adapter/forgejo/proto/LICENSE "$release_stage/third-party/forgejo-plugin-LICENSE"
 go list -m -json all > "$release_root/modules.json"
+go list -deps -f '{{if .Module}}{{.Module.Path}}{{end}}' ./cmd/... > "$release_root/linked-modules.txt"
 python3 - "$release_root" "$release_stage" "$release_version" "$release_revision" "$release_dirty" <<'PY'
 import json, pathlib, sys, shutil
 root,stage=map(pathlib.Path,sys.argv[1:3])
@@ -42,11 +46,15 @@ raw=(root/'modules.json').read_text();decoder=json.JSONDecoder(); modules=[]
 while raw.strip():
     raw=raw.lstrip();m,end=decoder.raw_decode(raw);raw=raw[end:];modules.append(m)
 inventory=[]
+linked=set((root/'linked-modules.txt').read_text().splitlines())
 for m in modules:
     item={k:m[k] for k in ('Path','Version','Sum') if k in m}
+    item['linked']=m['Path'] in linked
     directory=pathlib.Path(m.get('Dir','/nonexistent'))
     licenses=[p for p in directory.iterdir() if p.is_file() and p.name.lower().startswith(('license','copying','notice'))] if directory.is_dir() else []
-    if not m.get('Main'):
+    if not m.get('Main') and item['linked']:
+        if not licenses:
+            raise SystemExit('Missing license for linked module: '+m['Path'])
         target=stage/'third-party'/m['Path'].replace('/','_');target.mkdir(exist_ok=True)
         for license_file in licenses:
             pending=target/(license_file.name+'.tmp')
@@ -59,6 +67,10 @@ for m in modules:
 PY
 (cd "$release_stage" && sha256sum spawnpod spawnpod-agent spawnpod-source-proxy > BINARY_SHA256SUMS)
 tar --sort=name --mtime="@$release_epoch" --owner=0 --group=0 --numeric-owner \
-  -czf "$release_root/$release_package.tar.gz" -C "$release_root" "$release_package"
+  -czf "$release_root/$release_package.tar.gz" -C "$release_work" "$release_package"
+# Replace the complete staging directory; deleted source files must not survive
+# a repeated build in the next archive or OCI image.
+rm -rf "$release_root/$release_package"
+mv "$release_stage" "$release_root/$release_package"
 (cd "$release_root" && sha256sum "$release_package.tar.gz" > SHA256SUMS)
 printf 'Prepared %s (%s, dirty=%s). No upload performed.\n' "$release_root" "$release_revision" "$release_dirty"

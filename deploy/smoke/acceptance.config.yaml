@@ -1,0 +1,53 @@
+version: 1
+kubernetes:
+  namespace: sp-acceptance-ci-CHANGE-ME
+  kubeconfig: /ABSOLUTE/PATH/TO/kubeconfig
+  leaseNamespace: sp-acceptance-infra-CHANGE-ME
+  leaseName: spawnpod-controller
+  quota:
+    maxPods: 4
+    maxConfigMaps: 64
+    maxServices: 2
+    maxNetworkPolicies: 5
+    requestsCPU: "1"
+    limitsCPU: "2"
+    requestsMemory: 1Gi
+    limitsMemory: 2Gi
+    requestsStorage: 1Gi
+    limitsStorage: 4Gi
+controller:
+  reconcileInterval: 1s
+  cleanupTimeout: 10s
+  drainTimeout: 5s
+  monitorAddress: ""
+  socketPath: /ABSOLUTE/PATH/TO/private-directory/backend.sock
+  enableServices: true
+agentImage: localhost/spawnpod@sha256:REPLACE_WITH_IMPORTED_AGENT_DIGEST
+profiles:
+  default:
+    image: localhost/spawnpod-checkout@sha256:REPLACE_WITH_IMPORTED_JOB_DIGEST
+    architecture: amd64
+    uid: 10001
+    gid: 10001
+    cpuRequest: 50m
+    cpuLimit: 500m
+    memoryRequest: 64Mi
+    memoryLimit: 256Mi
+    storageRequest: 128Mi
+    storageLimit: 512Mi
+    workspaceSize: 128Mi
+    maxLifetime: 10m
+    services:
+      echo:
+        image: localhost/spawnpod-checkout@sha256:REPLACE_WITH_IMPORTED_JOB_DIGEST
+        command: [node, -e, "require('http').createServer((q,r)=>r.end('service-ok')).listen(8080,'0.0.0.0')"]
+        architecture: amd64
+        uid: 10001
+        gid: 10001
+        port: 8080
+        cpuRequest: 50m
+        cpuLimit: 500m
+        memoryRequest: 64Mi
+        memoryLimit: 256Mi
+        storageRequest: 128Mi
+        storageLimit: 512Mi

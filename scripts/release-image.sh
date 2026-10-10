@@ -3,13 +3,18 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 release_version=${1:-$(cat VERSION)}
 if [[ ! "$release_version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.-]+)?$ ]]; then exit 1; fi
+[[ "$release_version" == "$(cat VERSION)" ]] || { printf 'Release version must match VERSION.\n' >&2; exit 1; }
+if [[ -n "$(git status --porcelain)" && ${SPAWNPOD_ALLOW_DIRTY:-0} != 1 ]]; then
+  printf 'Commit the release sources before building an image.\n' >&2; exit 1
+fi
 release_root="dist/$release_version"
 release_package="spawnpod_${release_version}_linux_amd64"
 release_stage="$release_root/$release_package"
 [[ -f "$release_stage/release.json" ]] || { printf 'Build the binary package first.\n' >&2; exit 1; }
-python3 - "$release_stage/release.json" "$(git rev-parse HEAD)" "$release_version" <<'PYCODE'
+python3 - "$release_stage/release.json" "$(git rev-parse HEAD)" "$release_version" "${SPAWNPOD_ALLOW_DIRTY:-0}" <<'PYCODE'
 import json,sys
 with open(sys.argv[1]) as f:r=json.load(f)
+if r.get('dirty') and sys.argv[4]!='1':raise SystemExit('Dirty binary packages are local previews only; rebuild from committed sources.')
 if r['revision']!=sys.argv[2] or r['version']!=sys.argv[3]:raise SystemExit('Rebuild binary package from the current revision/version first.')
 PYCODE
 (cd "$release_stage" && sha256sum -c BINARY_SHA256SUMS)

@@ -146,19 +146,19 @@ func (p *Provider) CancelCommand(ctx context.Context, name string, uid types.UID
 	restReq.VersionedParams(&corev1.PodExecOptions{Container: containerName, Command: []string{agentPath, "cancel", commandID}, Stdout: true, Stderr: true}, scheme.ParameterCodec)
 	executor, err := remotecommand.NewSPDYExecutor(p.Config, "POST", restReq.URL())
 	if err != nil {
-		return err
+		return safeAgentError(err)
 	}
-	var stdout, stderr bytes.Buffer
-	if err := executor.StreamWithContext(ctx, remotecommand.StreamOptions{Stdout: &stdout, Stderr: &stderr}); err != nil {
-		return fmt.Errorf("cancel transport: %w", err)
+	var stdout bytes.Buffer
+	if err := executor.StreamWithContext(ctx, remotecommand.StreamOptions{Stdout: &stdout, Stderr: io.Discard}); err != nil {
+		return safeAgentError(err)
 	}
 	var event supervisor.Event
 	decoder := json.NewDecoder(&stdout)
 	if err := decoder.Decode(&event); err != nil {
-		return fmt.Errorf("cancel response: %w", err)
+		return safeAgentError(err)
 	}
 	if event.Error != "" {
-		return errors.New(event.Error)
+		return errors.New(supervisor.SafeFailure(event.Error))
 	}
 	if event.ExitCode == nil {
 		return errors.New("cancel response has no acknowledgement")
@@ -208,15 +208,14 @@ func (p *Provider) Exec(ctx context.Context, name string, uid types.UID, req sup
 	restReq.VersionedParams(&corev1.PodExecOptions{Container: containerName, Command: []string{agentPath, "invoke"}, Stdin: true, Stdout: true, Stderr: true, TTY: false}, scheme.ParameterCodec)
 	executor, err := remotecommand.NewSPDYExecutor(p.Config, "POST", restReq.URL())
 	if err != nil {
-		return err
+		return safeAgentError(err)
 	}
 	streamCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	outputReader, outputWriter := io.Pipe()
-	var stderr cappedError
 	done := make(chan error, 1)
 	go func() {
-		err := executor.StreamWithContext(streamCtx, remotecommand.StreamOptions{Stdin: bytes.NewReader(payload), Stdout: outputWriter, Stderr: &stderr, Tty: false})
+		err := executor.StreamWithContext(streamCtx, remotecommand.StreamOptions{Stdin: bytes.NewReader(payload), Stdout: outputWriter, Stderr: io.Discard, Tty: false})
 		_ = outputWriter.CloseWithError(err)
 		done <- err
 	}()
@@ -232,9 +231,12 @@ func (p *Provider) Exec(ctx context.Context, name string, uid types.UID, req sup
 				cancel()
 				_ = outputReader.CloseWithError(err)
 				<-done
-				return fmt.Errorf("decode agent output: %w", err)
+				return safeAgentError(err)
 			}
 			break
+		}
+		if event.Error != "" {
+			event.Error = supervisor.SafeFailure(event.Error)
 		}
 		if err := onEvent(event); err != nil {
 			cancel()
@@ -257,19 +259,19 @@ func (p *Provider) Exec(ctx context.Context, name string, uid types.UID, req sup
 		return errors.New("agent emitted output after terminal event")
 	}
 	if readErr != nil && !errors.Is(readErr, io.EOF) && transportErr == nil {
-		return readErr
+		return safeAgentError(readErr)
 	}
 	if !terminal {
 		if transportErr != nil {
-			return fmt.Errorf("agent exec transport: %w", transportErr)
+			return safeAgentError(transportErr)
 		}
 		return errors.New("agent stream ended without terminal event")
 	}
 	if terminalError != "" {
-		return fmt.Errorf("agent command %q in %q (image %q): %s", req.Argv[0], req.Dir, pod.Spec.Containers[0].Image, terminalError)
+		return errors.New(supervisor.SafeFailure(terminalError))
 	}
 	if transportErr != nil {
-		return fmt.Errorf("agent exec transport: %w", transportErr)
+		return safeAgentError(transportErr)
 	}
 	return nil
 }

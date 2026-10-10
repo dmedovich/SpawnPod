@@ -1,8 +1,22 @@
 # SpawnPod release specification
 
-Applies to **v0.1.0-rc.1**. This document specifies the shipped candidate;
-`spawnpod-docs/docs/PRD.md` describes the broader target product. Unsupported
-capabilities in that target are not promises made by this release.
+Applies to **v0.1.0-rc.2**. This document specifies the shipped candidate;
+[Architecture](ARCHITECTURE.md) describes the components and lifecycle.
+Capabilities outside this specification are not promises made by this release.
+
+This candidate includes the [security fixes](SECURITY.md) and the local checks
+recorded in [VALIDATION.md](VALIDATION.md). Target-cluster acceptance remains required.
+
+## Command hardening
+
+Commands run with an inherited seccomp guard: session/process-group changes,
+namespace creation and tracing are unsupported. Ordinary foreground shell/Git/Node
+use remains supported; failure to install the guard prevents execution. Cleanup
+kills the process group before reaping its leader. Socket writes and cleanup are
+bounded even when the reader stalls. Infrastructure errors use fixed messages;
+workflow output remains raw. Recovery processes supported records while preserving
+invalid or unknown records and reporting incompatibility. See [security](SECURITY.md)
+for the exact restrictions, detection interval and local test coverage.
 
 ## Purpose and supported boundary
 
@@ -139,9 +153,12 @@ validated runtime or node boundary.
 
 ## Acceptance evidence
 
-The source implementation journal records the exact environments and run IDs.
-Steps 22–36 cover the local RPC lifecycle, official Runner, negative policy
-checks, services, restart/API/deletion faults, tar traversal and HTTPS checkout.
-Run 39 verifies private HTTPS Node-based checkout with exact commit and shallow
-repository checks. Candidate-specific packaging, probes and shutdown evidence
-is recorded in step 37. Outstanding production gates are listed in RELEASE.md.
+The local candidate was exercised with official Runner workflows, including
+private HTTPS Node-based checkout, service isolation, bounded tar transfer and
+restart/API/deletion/lost-response recovery. These are historical local checks,
+not proof of target-cluster behavior or complete fault coverage.
+
+The source test suite covers lifecycle transitions, policy rendering, RPC
+mapping, workspace validation, probes and drain behavior. The later source
+review and reproduction results are summarized in [security](SECURITY.md).
+Outstanding production gates are listed in [release process](RELEASE.md).

@@ -3,12 +3,62 @@ package supervisor
 import (
 	"context"
 	"errors"
+	"golang.org/x/sys/unix"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 )
+
+func TestMain(m *testing.M) {
+	if len(os.Args) == 2 && os.Args[1] == "command-guard" {
+		if GuardCommand() != nil {
+			syscall.Exit(1)
+		}
+		syscall.Exit(0)
+	}
+	if len(os.Args) == 3 && os.Args[1] == "guard-fork-probe" {
+		if exec.Command(os.Args[0], "guard-probe", os.Args[2]).Run() != nil {
+			syscall.Exit(1)
+		}
+		syscall.Exit(0)
+	}
+	if len(os.Args) == 3 && os.Args[1] == "guard-probe" {
+		var errno syscall.Errno
+		expected := syscall.EPERM
+		switch os.Args[2] {
+		case "setsid":
+			_, _, errno = syscall.RawSyscall(unix.SYS_SETSID, 0, 0, 0)
+		case "setpgid":
+			_, _, errno = syscall.RawSyscall(unix.SYS_SETPGID, 0, 0, 0)
+		case "clone-newuser":
+			_, _, errno = syscall.RawSyscall(unix.SYS_CLONE, unix.CLONE_NEWUSER, 0, 0)
+		case "clone-newpid":
+			_, _, errno = syscall.RawSyscall(unix.SYS_CLONE, unix.CLONE_NEWPID, 0, 0)
+		case "clone3":
+			_, _, errno = syscall.RawSyscall(unix.SYS_CLONE3, 0, 0, 0)
+			expected = syscall.ENOSYS
+		case "unshare":
+			_, _, errno = syscall.RawSyscall(unix.SYS_UNSHARE, 0, 0, 0)
+		case "setns":
+			_, _, errno = syscall.RawSyscall(unix.SYS_SETNS, 0, 0, 0)
+		case "ptrace":
+			_, _, errno = syscall.RawSyscall(unix.SYS_PTRACE, 0, 0, 0)
+		case "writev":
+			_, _, errno = syscall.RawSyscall6(unix.SYS_PROCESS_VM_WRITEV, 0, 0, 0, 0, 0, 0)
+		default:
+			syscall.Exit(2)
+		}
+		if errno != expected {
+			syscall.Exit(1)
+		}
+		syscall.Exit(0)
+	}
+	os.Exit(m.Run())
+}
 
 func startServer(t *testing.T) (string, *Server) {
 	t.Helper()

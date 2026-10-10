@@ -1,10 +1,11 @@
 package kubernetes
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
+	"io"
 
 	"github.com/dmedovich/spawnpod/internal/engine"
 	corev1 "k8s.io/api/core/v1"
@@ -45,8 +46,13 @@ func parseRecord(configMap *corev1.ConfigMap) (engine.Record, error) {
 		return engine.Record{}, errors.New("ConfigMap is not owned by spawnPod")
 	}
 	var record engine.Record
-	if err := json.Unmarshal([]byte(configMap.Data[recordKey]), &record); err != nil {
-		return engine.Record{}, fmt.Errorf("decode environment record: %w", err)
+	decoder := json.NewDecoder(bytes.NewBufferString(configMap.Data[recordKey]))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&record); err != nil {
+		return engine.Record{}, errors.New("invalid environment record")
+	}
+	if err := decoder.Decode(new(any)); !errors.Is(err, io.EOF) {
+		return engine.Record{}, errors.New("invalid environment record")
 	}
 	if (record.Version != 1 && record.Version != 2) || (record.Version == 1 && len(record.Services) != 0) || record.ID == "" || configMap.Name != "sp-"+record.ID || configMap.Labels[environmentLabel] != record.ID {
 		return engine.Record{}, errors.New("environment record identity mismatch")
@@ -124,12 +130,17 @@ func (s *ConfigMapStore) List(ctx context.Context) ([]engine.Record, error) {
 		return nil, err
 	}
 	records := make([]engine.Record, 0, len(list.Items))
+	rejected := 0
 	for i := range list.Items {
 		record, err := parseRecord(&list.Items[i])
 		if err != nil {
-			return nil, err
+			rejected++
+			continue
 		}
 		records = append(records, record)
+	}
+	if rejected != 0 {
+		return records, &engine.PartialListError{Rejected: rejected}
 	}
 	return records, nil
 }

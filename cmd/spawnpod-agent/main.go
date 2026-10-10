@@ -27,7 +27,7 @@ const socket = "/tmp/spawnpod/control.sock"
 
 func main() {
 	if err := run(os.Args[1:]); err != nil {
-		fmt.Fprintln(os.Stderr, err)
+		fmt.Fprintln(os.Stderr, "agent operation failed")
 		os.Exit(1)
 	}
 }
@@ -37,6 +37,11 @@ func run(args []string) error {
 		return fmt.Errorf("usage: spawnpod-agent serve|serve-service|install|ping|service-ping|invoke|service-start|cancel|copy-in|copy-out|metadata")
 	}
 	switch args[0] {
+	case "command-guard":
+		if len(args) != 1 {
+			return fmt.Errorf("invalid command guard invocation")
+		}
+		return supervisor.GuardCommand()
 	case "version":
 		if len(args) != 1 {
 			return fmt.Errorf("usage: spawnpod-agent version")

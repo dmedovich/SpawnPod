@@ -36,6 +36,7 @@ type Engine struct {
 	mu             sync.Mutex
 	active         map[string]*operation
 	removals       map[string]*removal
+	incompatible   bool
 }
 
 type CreateRequest struct {
@@ -60,6 +61,12 @@ func (e *Engine) validate() error {
 func (e *Engine) Create(ctx context.Context, req CreateRequest) (Record, error) {
 	if err := e.validate(); err != nil {
 		return Record{}, err
+	}
+	e.mu.Lock()
+	incompatible := e.incompatible
+	e.mu.Unlock()
+	if incompatible {
+		return Record{}, ErrInvalidState
 	}
 	if req.Owner == "" || req.Profile == "" || !req.Deadline.After(time.Now()) {
 		return Record{}, errors.New("owner, profile and future deadline are required")
@@ -123,13 +130,13 @@ func (e *Engine) Create(ctx context.Context, req CreateRequest) (Record, error) 
 			}
 		}
 		if createErr != nil {
-			record, _ = e.change(context.Background(), id, []State{StateProvisioning}, func(r *Record) { r.State = StateFailed; r.LastError = "service creation failed" })
+			record, _ = e.changeAfterFailure(id, []State{StateProvisioning}, func(r *Record) { r.State = StateFailed; r.LastError = "service creation failed" })
 			return record, fmt.Errorf("create service %s: %w", service.Spec.Name, createErr)
 		}
 		ip, addressErr := e.Services.ResolveServiceAddress(createCtx, service.Spec, handle)
 		address, parseErr := netip.ParseAddr(ip)
 		if addressErr != nil || parseErr != nil || !address.IsGlobalUnicast() {
-			record, _ = e.change(context.Background(), id, []State{StateProvisioning}, func(r *Record) { r.State = StateFailed; r.LastError = "service address unavailable" })
+			record, _ = e.changeAfterFailure(id, []State{StateProvisioning}, func(r *Record) { r.State = StateFailed; r.LastError = "service address unavailable" })
 			if addressErr != nil {
 				return record, fmt.Errorf("resolve service %s address: %w", service.Spec.Name, addressErr)
 			}
@@ -142,17 +149,17 @@ func (e *Engine) Create(ctx context.Context, req CreateRequest) (Record, error) 
 		req.Job.ServiceAliases = append(req.Job.ServiceAliases, ServiceAlias{Name: service.Spec.Name, IP: address.String()})
 		lifetime := time.Until(req.Deadline)
 		if lifetime <= 0 {
-			record, _ = e.change(context.Background(), id, []State{StateProvisioning}, func(r *Record) { r.State = StateFailed; r.LastError = "service startup deadline expired" })
+			record, _ = e.changeAfterFailure(id, []State{StateProvisioning}, func(r *Record) { r.State = StateFailed; r.LastError = "service startup deadline expired" })
 			return record, context.DeadlineExceeded
 		}
 		if err := e.Services.StartService(createCtx, service.Spec, handle, req.ServiceEnvironments[service.Spec.Name], lifetime); err != nil {
-			record, _ = e.change(context.Background(), id, []State{StateProvisioning}, func(r *Record) { r.State = StateFailed; r.LastError = "service startup failed" })
+			record, _ = e.changeAfterFailure(id, []State{StateProvisioning}, func(r *Record) { r.State = StateFailed; r.LastError = "service startup failed" })
 			return record, fmt.Errorf("start service %s: %w", service.Spec.Name, err)
 		}
 	}
 	handle, err := e.Jobs.CreateJob(createCtx, req.Job)
 	if err != nil {
-		record, _ = e.change(context.Background(), id, []State{StateProvisioning}, func(r *Record) { r.State = StateFailed; r.LastError = "job creation failed" })
+		record, _ = e.changeAfterFailure(id, []State{StateProvisioning}, func(r *Record) { r.State = StateFailed; r.LastError = "job creation failed" })
 		return record, fmt.Errorf("create job Pod: %w", err)
 	}
 	record, err = e.change(createCtx, id, []State{StateProvisioning}, func(r *Record) { r.Job = handle })
@@ -183,7 +190,7 @@ func (e *Engine) Start(ctx context.Context, id string) (Record, error) {
 	deadlineCtx, stop := context.WithDeadline(opCtx, record.Deadline)
 	defer stop()
 	if err := e.Jobs.WaitReady(deadlineCtx, record.Job); err != nil {
-		_, _ = e.change(context.Background(), id, []State{StateProvisioning}, func(r *Record) { r.State = StateFailed; r.LastError = "job did not become ready" })
+		_, _ = e.changeAfterFailure(id, []State{StateProvisioning}, func(r *Record) { r.State = StateFailed; r.LastError = "job did not become ready" })
 		return record, err
 	}
 	serviceIPs := make([]string, len(record.Services))
@@ -196,7 +203,7 @@ func (e *Engine) Start(ctx context.Context, id string) (Record, error) {
 			err = errors.New("service ClusterIP changed after job Pod creation")
 		}
 		if err != nil {
-			_, _ = e.change(context.Background(), id, []State{StateProvisioning}, func(r *Record) { r.State = StateFailed; r.LastError = "service did not become ready" })
+			_, _ = e.changeAfterFailure(id, []State{StateProvisioning}, func(r *Record) { r.State = StateFailed; r.LastError = "service did not become ready" })
 			return record, fmt.Errorf("service %s: %w", service.Spec.Name, err)
 		}
 		serviceIPs[i] = ip
@@ -270,8 +277,8 @@ func (e *Engine) Exec(ctx context.Context, id string, req supervisor.Request, on
 	err = e.Jobs.Exec(deadlineCtx, record.Job, req, onEvent)
 	stop()
 	if err != nil {
-		slog.Error("environment command failed", "environment", id, "error", err)
-		_, _ = e.change(context.Background(), id, []State{StateExecuting}, func(r *Record) { r.State = StateIndeterminate; r.LastError = "command transport or execution failed" })
+		slog.Error("environment command failed", "environment", id, "failure", "backend operation failed")
+		_, _ = e.changeAfterFailure(id, []State{StateExecuting}, func(r *Record) { r.State = StateIndeterminate; r.LastError = "command transport or execution failed" })
 		leave()
 		cleanupCtx, cancel := context.WithTimeout(context.Background(), e.CleanupTimeout)
 		defer cancel()
@@ -305,8 +312,8 @@ func (e *Engine) CopyIn(ctx context.Context, id, dest string, input io.Reader) e
 	err = e.Jobs.CopyIn(deadlineCtx, record.Job, dest, input)
 	stop()
 	if err != nil {
-		slog.Error("environment file transfer failed", "environment", id, "error", err)
-		_, _ = e.change(context.Background(), id, []State{StateTransferring}, func(r *Record) { r.State = StateIndeterminate; r.LastError = "file transfer failed" })
+		slog.Error("environment file transfer failed", "environment", id, "failure", "backend operation failed")
+		_, _ = e.changeAfterFailure(id, []State{StateTransferring}, func(r *Record) { r.State = StateIndeterminate; r.LastError = "file transfer failed" })
 		leave()
 		cleanupCtx, cancel := context.WithTimeout(context.Background(), e.CleanupTimeout)
 		defer cancel()
@@ -498,6 +505,14 @@ func (e *Engine) change(ctx context.Context, id string, allowed []State, mutate 
 	return Record{}, ErrConflict
 }
 
+// changeAfterFailure records best-effort failure state even after the request
+// was cancelled. A failed API must not hold the operation slot indefinitely.
+func (e *Engine) changeAfterFailure(id string, allowed []State, mutate func(*Record)) (Record, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), e.CleanupTimeout)
+	defer cancel()
+	return e.change(ctx, id, allowed, mutate)
+}
+
 // ErrConflict denotes a storage compare-and-swap collision.
 var ErrConflict = errors.New("environment record conflict")
 
@@ -508,10 +523,17 @@ func (e *Engine) ReconcileOnce(ctx context.Context) error {
 		return err
 	}
 	records, err := e.Store.List(ctx)
-	if err != nil {
-		return err
-	}
 	var failures []error
+	if err != nil {
+		var partial *PartialListError
+		if !errors.As(err, &partial) {
+			return err
+		}
+		failures = append(failures, err)
+	}
+	e.mu.Lock()
+	e.incompatible = err != nil
+	e.mu.Unlock()
 	now := time.Now()
 	for _, record := range records {
 		action, _ := PlanReconciliation(record, now)

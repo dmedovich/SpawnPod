@@ -1,8 +1,11 @@
-# Install and operate SpawnPod v0.1.0-rc.1
+# Install and operate SpawnPod v0.1.0-rc.2
 
 This candidate targets Linux/amd64 and a single active controller. Use a test
 cluster first. Nothing in the release scripts installs into a cluster or
 publishes to a registry automatically.
+
+This candidate includes the [security fixes](SECURITY.md). Start in a disposable
+test cluster and review the [local validation and remaining target checks](VALIDATION.md).
 
 ## Prerequisites
 
@@ -28,15 +31,15 @@ Download the architecture archive and SHA256SUMS from the same release.
 
 ```sh
 sha256sum -c SHA256SUMS
-tar -xzf spawnpod_v0.1.0-rc.1_linux_amd64.tar.gz
-cd spawnpod_v0.1.0-rc.1_linux_amd64
+tar -xzf spawnpod_v0.1.0-rc.2_linux_amd64.tar.gz
+cd spawnpod_v0.1.0-rc.2_linux_amd64
 sha256sum -c BINARY_SHA256SUMS
 ./spawnpod version
 ./spawnpod-agent version
 ./spawnpod-source-proxy version
 ```
 
-All three commands should print `v0.1.0-rc.1`. Checksums detect corruption;
+All three commands should print `v0.1.0-rc.2`. Checksums detect corruption;
 this candidate does not supply a detached signature or signing identity.
 `release.json` identifies the source revision and whether it was dirty. Only
 `dirty: false` builds are release candidates for publication.
@@ -47,9 +50,9 @@ The release can include a runtime OCI archive. Alternatively build it from
 this extracted package and push to your own registry:
 
 ```sh
-podman build --build-arg VERSION=v0.1.0-rc.1 \
-  -f deploy/release/runtime.Dockerfile -t registry.example.com/spawnpod:v0.1.0-rc.1 .
-podman push registry.example.com/spawnpod:v0.1.0-rc.1
+podman build --build-arg VERSION=v0.1.0-rc.2 \
+  -f deploy/release/runtime.Dockerfile -t registry.example.com/spawnpod:v0.1.0-rc.2 .
+podman push registry.example.com/spawnpod:v0.1.0-rc.2
 ```
 
 Record the registry manifest digest and use the immutable
@@ -62,10 +65,10 @@ For an offline single-node K3s installation, import the downloaded OCI
 archive, inspect its manifest digest, and tag the exact named digest:
 
 ```sh
-sudo k3s ctr -n k8s.io images import --digests spawnpod_v0.1.0-rc.1_linux_amd64.oci.tar
+sudo k3s ctr -n k8s.io images import --digests spawnpod_v0.1.0-rc.2_linux_amd64.oci.tar
 sudo k3s ctr -n k8s.io images list
 # Replace DIGEST below with the manifest digest recorded in the release.
-sudo k3s ctr -n k8s.io images tag localhost/spawnpod:v0.1.0-rc.1 \
+sudo k3s ctr -n k8s.io images tag localhost/spawnpod:v0.1.0-rc.2 \
   localhost/spawnpod@sha256:DIGEST
 ```
 
@@ -160,7 +163,8 @@ the target node before raising job concurrency.
 ## Upgrade, rollback and credentials
 
 1. Quiesce Runner scheduling and wait for active workflows/environments to
-   finish. RPC drain does not finish an entire workflow across multiple steps.
+   finish and confirm all job/service resources have been removed. RPC drain
+   does not finish an entire workflow across multiple steps.
 2. Save current operator config, manifests, image digests and non-secret
    environment records. Keep registration credentials in your secret store.
 3. Render and review the new admission policy and install manifest. Apply the
@@ -169,8 +173,9 @@ the target node before raising job concurrency.
    controller; config checksum changes trigger a new Pod. Repeat doctor,
    smoke and a real workflow before re-enabling scheduling.
 5. For rollback, restore the matching old config, admission and image digests
-   together, then rerun checks. This first release has no prior supported
-   version to roll back to. Record schemas 1 and 2 are readable; unknown
+   together, then rerun checks. The local rc.1/rc.2 controller compatibility
+   check uses drained records and the current agent image; it does not migrate
+   running jobs or make the old vulnerable agent safe. Record schemas 1 and 2 are readable; unknown
    future schemas fail closed. Do not downgrade across an untested schema
    change or delete records to force startup.
 6. Rotate Runner credentials by replacing the private Secret and restarting

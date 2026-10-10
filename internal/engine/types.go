@@ -119,6 +119,14 @@ type Record struct {
 	Revision      string          `json:"-"`
 }
 
+// PartialListError reports records left untouched because their persisted format
+// is unsupported or invalid. The returned records remain safe to reconcile.
+type PartialListError struct{ Rejected int }
+
+func (*PartialListError) Error() string {
+	return "unsupported or invalid environment records remain; manual review required"
+}
+
 // Store must implement compare-and-swap Update using Record.Revision. A
 // conflict is returned as an error; Engine re-reads rather than overwriting
 // another state transition.
@@ -126,6 +134,8 @@ type Store interface {
 	Create(context.Context, Record) (Record, error)
 	Get(context.Context, string) (Record, error)
 	Update(context.Context, Record) (Record, error)
+	// List may return supported records alongside a *PartialListError. Other
+	// errors must not be interpreted as an authoritative partial snapshot.
 	List(context.Context) ([]Record, error)
 	Delete(context.Context, string, string) error
 }

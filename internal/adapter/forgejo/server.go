@@ -296,7 +296,7 @@ func (s *Server) Exec(req *pb.ExecRequest, stream grpc.ServerStreamingServer[pb.
 			return stream.Send(&pb.ExecOutput{Output: &pb.ExecOutput_Data{Data: &pb.DataChunk{Stream: kind, Data: event.Data}}})
 		}
 		if event.Error != "" {
-			terminal = &pb.ExecOutput{Output: &pb.ExecOutput_ExecFailed{ExecFailed: &pb.ExecFailed{ErrorMessage: event.Error}}}
+			terminal = &pb.ExecOutput{Output: &pb.ExecOutput_ExecFailed{ExecFailed: &pb.ExecFailed{ErrorMessage: supervisor.SafeFailure(event.Error)}}}
 			return nil
 		}
 		if event.ExitCode != nil {
@@ -309,7 +309,7 @@ func (s *Server) Exec(req *pb.ExecRequest, stream grpc.ServerStreamingServer[pb.
 		if stream.Context().Err() != nil {
 			return mapError(stream.Context().Err())
 		}
-		slog.Error("job command failed", "environment", req.GetEnvironmentId(), "error", err)
+		slog.Error("job command failed", "environment", req.GetEnvironmentId(), "failure", "backend operation failed")
 		return stream.Send(&pb.ExecOutput{Output: &pb.ExecOutput_ExecFailed{ExecFailed: &pb.ExecFailed{ErrorMessage: "execution failed"}}})
 	}
 	if terminal == nil {
@@ -436,14 +436,12 @@ func (s *Server) Remove(ctx context.Context, req *pb.RemoveRequest) (*pb.RemoveR
 func invalid(message string) error { return status.Error(codes.InvalidArgument, message) }
 
 func mapError(err error) error {
-	if _, ok := status.FromError(err); ok {
-		return err
-	}
+
 	switch {
 	case errors.Is(err, engine.ErrNotFound), apierrors.IsNotFound(err):
 		return status.Error(codes.NotFound, "environment not found")
 	case errors.Is(err, engine.ErrBusy), errors.Is(err, engine.ErrInvalidState):
-		return status.Error(codes.FailedPrecondition, err.Error())
+		return status.Error(codes.FailedPrecondition, "environment is busy or unavailable")
 	case errors.Is(err, context.Canceled):
 		return status.Error(codes.Canceled, "operation cancelled")
 	case errors.Is(err, context.DeadlineExceeded):
@@ -451,6 +449,9 @@ func mapError(err error) error {
 	case apierrors.IsServiceUnavailable(err), apierrors.IsTimeout(err), apierrors.IsServerTimeout(err):
 		return status.Error(codes.Unavailable, "Kubernetes API unavailable")
 	default:
+		if remote, ok := status.FromError(err); ok && remote.Code() != codes.OK {
+			return status.Error(remote.Code(), "backend operation failed")
+		}
 		return status.Error(codes.Internal, "backend operation failed")
 	}
 }

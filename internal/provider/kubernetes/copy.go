@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"path"
-	"strings"
 
 	"github.com/dmedovich/spawnpod/internal/engine"
 	"github.com/dmedovich/spawnpod/internal/workspace"
@@ -19,8 +18,6 @@ import (
 	"k8s.io/client-go/tools/remotecommand"
 )
 
-type cappedError struct{ value strings.Builder }
-
 type metadataBuffer struct{ bytes.Buffer }
 
 func (b *metadataBuffer) Write(p []byte) (int, error) {
@@ -28,18 +25,6 @@ func (b *metadataBuffer) Write(p []byte) (int, error) {
 		return 0, errors.New("agent metadata exceeds 1 MiB")
 	}
 	return b.Buffer.Write(p)
-}
-
-func (b *cappedError) Write(p []byte) (int, error) {
-	n := len(p)
-	remaining := 8192 - b.value.Len()
-	if remaining > 0 {
-		if len(p) > remaining {
-			p = p[:remaining]
-		}
-		_, _ = b.value.Write(p)
-	}
-	return n, nil
 }
 
 func (p *Provider) transfer(ctx context.Context, handle engine.JobHandle, command []string, stdin io.Reader, stdout io.Writer) error {
@@ -67,14 +52,13 @@ func (p *Provider) transferContainer(ctx context.Context, handle engine.JobHandl
 	restReq.VersionedParams(&corev1.PodExecOptions{Container: targetContainer, Command: command, Stdin: stdin != nil, Stdout: true, Stderr: true, TTY: false}, scheme.ParameterCodec)
 	executor, err := remotecommand.NewSPDYExecutor(p.Config, "POST", restReq.URL())
 	if err != nil {
-		return err
+		return safeAgentError(err)
 	}
-	var stderr cappedError
 	if stdout == nil {
 		stdout = io.Discard
 	}
-	if err := executor.StreamWithContext(ctx, remotecommand.StreamOptions{Stdin: stdin, Stdout: stdout, Stderr: &stderr, Tty: false}); err != nil {
-		return fmt.Errorf("agent pods/exec: %w: %s", err, stderr.value.String())
+	if err := executor.StreamWithContext(ctx, remotecommand.StreamOptions{Stdin: stdin, Stdout: stdout, Stderr: io.Discard, Tty: false}); err != nil {
+		return safeAgentError(err)
 	}
 	return nil
 }
@@ -114,4 +98,15 @@ func (p *Provider) Metadata(ctx context.Context, handle engine.JobHandle) (engin
 		return engine.RuntimeMetadata{}, errors.New("unsupported agent OS or architecture")
 	}
 	return metadata, nil
+}
+
+// Do not wrap transport errors: they can contain request values or remote stderr.
+func safeAgentError(err error) error {
+	if errors.Is(err, context.Canceled) {
+		return context.Canceled
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return context.DeadlineExceeded
+	}
+	return errors.New("agent operation failed")
 }
