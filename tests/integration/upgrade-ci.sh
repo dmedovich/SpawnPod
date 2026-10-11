@@ -66,9 +66,10 @@ cleanup() {
 }
 trap cleanup EXIT
 for attempt in $(seq 1 120); do
-  if sudo k3s kubectl get nodes >/dev/null 2>&1; then break; fi
+  if node_names=$(sudo k3s kubectl get nodes -o name 2>/dev/null) && [[ -n "$node_names" ]]; then break; fi
   sleep 1
 done
+[[ -n ${node_names:-} ]] || { printf 'K3s did not register a node within 120 seconds.\n' >&2; exit 1; }
 sudo cat /etc/rancher/k3s/k3s.yaml > "$evidence/kubeconfig"
 export KUBECONFIG="$evidence/kubeconfig"
 kubectl wait node --all --for=condition=Ready --timeout=180s
