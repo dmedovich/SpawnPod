@@ -83,3 +83,39 @@ does not replace eviction, OOM or disk-pressure testing. Drain/remove old jobs
 before controller/agent upgrade or rollback; running-job migration and mixed
 controller versions are unsupported. Real ARM64 execution and hostile tenant
 isolation remain outside this candidate's support claim.
+
+## Operations changes for rc.5, 2026-10-11
+
+The working-tree controller passed `make check`: all Go tests, `go vet`,
+module verification and whitespace checks. Added regression coverage includes
+custom tombstone retention, repeated jobs, restart and delete retry, safe and
+unsafe default-deny selectors, strict doctor warnings, current quota usage,
+missing Runner Secret keys and suppression of credential contents.
+
+All local K3s acceptance scenarios passed across the initial run and a targeted
+retry of Capacity, ControllerCrash and ReleasedControllerUpgradeRollback.
+The initial failures of those three scenarios came from a test evidence
+directory created with mode 0755; after setting the required 0700, all three
+passed. The controller's private socket check stayed enabled.
+
+Confirmed with the real Kubernetes API:
+
+- Pod removal and retention expiration after process exits 0 and 7. Only test
+  record timestamps were backdated; ConfigMap deletion used real resourceVersion
+  preconditions and a fresh Engine, without waiting a full minute.
+- Recovery of interrupted states and a killed controller; synthetic API outage.
+- Namespace-wide default-deny with permitted same-environment service traffic
+  and denied API egress, unrelated Pod egress, cross-environment service traffic
+  and unrelated service ingress, using positive controls.
+- Three concurrent jobs and drained rc.1 → working-tree controller → rc.1
+  upgrade/rollback. The suite restores the legacy managed selector before
+  starting old controllers, and uses namespace-wide selection for the new one.
+- Test namespaces were deleted; the original admission policy UID and spec
+  matched the saved snapshot after cleanup.
+
+Local evidence: `.local/operations-qol-20261011/check.log`, `cluster.log`,
+`cluster-retry.log` and controller logs (ignored by Git). These scenarios use
+direct plugin RPCs and an existing local agent image; they do not confirm a
+successful workflow in the original Forgejo installation or validate a newly
+published OCI image. Release publication, GitOps rollout and that installation's
+workflow outcomes remain pending.

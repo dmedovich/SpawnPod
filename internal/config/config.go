@@ -54,12 +54,13 @@ type Quota struct {
 }
 
 type Controller struct {
-	ReconcileInterval string `yaml:"reconcileInterval"`
-	CleanupTimeout    string `yaml:"cleanupTimeout"`
-	SocketPath        string `yaml:"socketPath"`
-	EnableServices    bool   `yaml:"enableServices"`
-	DrainTimeout      string `yaml:"drainTimeout"`
-	MonitorAddress    string `yaml:"monitorAddress"`
+	TombstoneRetention string `yaml:"tombstoneRetention,omitempty"`
+	ReconcileInterval  string `yaml:"reconcileInterval"`
+	CleanupTimeout     string `yaml:"cleanupTimeout"`
+	SocketPath         string `yaml:"socketPath"`
+	EnableServices     bool   `yaml:"enableServices"`
+	DrainTimeout       string `yaml:"drainTimeout"`
+	MonitorAddress     string `yaml:"monitorAddress"`
 }
 
 type Profile struct {
@@ -140,6 +141,9 @@ func (c Config) Validate() error {
 		return err
 	}
 	if _, err := c.CleanupTimeout(); err != nil {
+		return err
+	}
+	if _, err := c.TombstoneRetention(); err != nil {
 		return err
 	}
 	if _, err := c.DrainTimeout(); err != nil {
@@ -300,6 +304,14 @@ func (c Config) ReconcileInterval() (time.Duration, error) {
 }
 func (c Config) CleanupTimeout() (time.Duration, error) {
 	return parseBoundedDuration(c.Controller.CleanupTimeout, "cleanupTimeout", time.Second, 10*time.Minute)
+}
+
+// TombstoneRetention bounds durable idempotency history independently of Pod cleanup.
+func (c Config) TombstoneRetention() (time.Duration, error) {
+	if c.Controller.TombstoneRetention == "" {
+		return engine.DefaultTombstoneRetention, nil
+	}
+	return parseBoundedDuration(c.Controller.TombstoneRetention, "tombstoneRetention", time.Minute, 24*time.Hour)
 }
 func (c Config) DrainTimeout() (time.Duration, error) {
 	if c.Controller.DrainTimeout == "" {

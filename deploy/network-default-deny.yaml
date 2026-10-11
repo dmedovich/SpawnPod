@@ -7,9 +7,7 @@ metadata:
   name: spawnpod-default-deny
   namespace: ci
 spec:
-  podSelector:
-    matchLabels:
-      spawnpod.dev/managed: "true"
+  podSelector: {}
   policyTypes:
     - Ingress
     - Egress

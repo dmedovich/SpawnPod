@@ -184,7 +184,13 @@ func defaultMatchPolicy(policy *admissionv1.MatchPolicyType) bool {
 }
 
 func validDefaultDeny(policy *networkingv1.NetworkPolicy) bool {
-	if policy == nil || len(policy.Spec.PodSelector.MatchLabels) != 1 || policy.Spec.PodSelector.MatchLabels["spawnpod.dev/managed"] != "true" || len(policy.Spec.PodSelector.MatchExpressions) != 0 || len(policy.Spec.Ingress) != 0 || len(policy.Spec.Egress) != 0 || len(policy.Spec.PolicyTypes) != 2 {
+	if policy == nil {
+		return false
+	}
+	selector := policy.Spec.PodSelector
+	// Both the namespace-wide baseline and the original managed-Pod baseline
+	// cover every job/service Pod. Extra requirements could exclude one.
+	if !(len(selector.MatchLabels) == 0 || len(selector.MatchLabels) == 1 && selector.MatchLabels["spawnpod.dev/managed"] == "true") || len(selector.MatchExpressions) != 0 || len(policy.Spec.Ingress) != 0 || len(policy.Spec.Egress) != 0 || len(policy.Spec.PolicyTypes) != 2 {
 		return false
 	}
 	return (policy.Spec.PolicyTypes[0] == networkingv1.PolicyTypeIngress && policy.Spec.PolicyTypes[1] == networkingv1.PolicyTypeEgress) || (policy.Spec.PolicyTypes[0] == networkingv1.PolicyTypeEgress && policy.Spec.PolicyTypes[1] == networkingv1.PolicyTypeIngress)
@@ -259,7 +265,8 @@ func Run(ctx context.Context, cfg config.Config, client kubernetes.Interface, re
 		return fmt.Errorf("create Lease lock: %w", err)
 	}
 	jobs := &provider.Provider{Client: client, Config: restConfig, Namespace: cfg.Kubernetes.Namespace}
-	worker := &engine.Engine{Store: &provider.ConfigMapStore{Client: client, Namespace: cfg.Kubernetes.Namespace}, Jobs: &provider.EngineJobs{Provider: jobs}, Services: &provider.EngineServices{Provider: jobs}, CleanupTimeout: cleanupTimeout}
+	retention, _ := cfg.TombstoneRetention()
+	worker := &engine.Engine{Store: &provider.ConfigMapStore{Client: client, Namespace: cfg.Kubernetes.Namespace}, Jobs: &provider.EngineJobs{Provider: jobs}, Services: &provider.EngineServices{Provider: jobs}, CleanupTimeout: cleanupTimeout, TombstoneRetention: retention, Logger: logger}
 	plugin, err := forgejo.New(worker, worker.Store, cfg)
 	if err != nil {
 		return err

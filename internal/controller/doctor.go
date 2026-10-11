@@ -5,10 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"sort"
 	"strings"
 
 	"github.com/dmedovich/spawnpod/internal/admission"
 	"github.com/dmedovich/spawnpod/internal/config"
+	"github.com/dmedovich/spawnpod/internal/deployment"
 	authorizationv1 "k8s.io/api/authorization/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
@@ -17,6 +19,17 @@ import (
 // Doctor checks the installed security baseline using the controller's own
 // credentials. It does not create workloads or prove runtime policy enforcement.
 func Doctor(ctx context.Context, cfg config.Config, client kubernetes.Interface, out io.Writer) error {
+	return DoctorWithOptions(ctx, cfg, client, out, DoctorOptions{})
+}
+
+type DoctorOptions struct {
+	Strict bool
+	// Installation requires operator access to infra Secrets/ConfigMaps/quotas.
+	// Controller credentials deliberately lack access to Runner credentials.
+	Installation bool
+}
+
+func DoctorWithOptions(ctx context.Context, cfg config.Config, client kubernetes.Interface, out io.Writer, options DoctorOptions) error {
 	if err := cfg.Validate(); err != nil {
 		return fmt.Errorf("validate configuration: %w", err)
 	}
@@ -30,24 +43,74 @@ func Doctor(ctx context.Context, cfg config.Config, client kubernetes.Interface,
 		}
 	}
 	var failures []string
+	passed, warnings := 0, 0
 	check := func(name string, err error) {
 		if err == nil {
+			passed++
 			write("OK   %s\n", name)
 			return
 		}
 		write("FAIL %s: %v\n", name, err)
 		failures = append(failures, name)
 	}
+	warn := func(message string) {
+		warnings++
+		write("WARN %s\n", message)
+		if options.Strict {
+			failures = append(failures, message)
+		}
+	}
 	check("controller preflight", Preflight(ctx, cfg, client))
 	check("workload namespace Pod Security", doctorNamespace(ctx, cfg, client))
 	check("tokenless job ServiceAccount", doctorServiceAccount(ctx, cfg, client))
 	check("admission expression type checking", doctorTypeChecking(ctx, client))
 	check("namespace quota status", doctorQuotaStatus(ctx, cfg, client))
+	quota, quotaErr := client.CoreV1().ResourceQuotas(cfg.Kubernetes.Namespace).Get(ctx, admission.QuotaName, metav1.GetOptions{})
+	if quotaErr == nil {
+		names := make([]string, 0, len(cfg.Profiles))
+		for name := range cfg.Profiles {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		for _, name := range names {
+			for _, message := range quotaWarnings(quota, profileBudget(cfg, cfg.Profiles[name])) {
+				warn("profile " + name + ": " + message)
+			}
+		}
+	}
+	images := []string{cfg.AgentImage}
+	for _, profile := range cfg.Profiles {
+		images = append(images, profile.Image)
+		for _, service := range profile.Services {
+			images = append(images, service.Image)
+		}
+	}
+	for _, image := range images {
+		host := strings.SplitN(image, "/", 2)[0]
+		if host == "localhost" || strings.HasPrefix(host, "localhost:") || strings.HasPrefix(host, "127.") || strings.HasPrefix(host, "[::1]") {
+			warn("node-local image reference: import the pinned image on every eligible node or publish it to a reachable registry")
+			break
+		}
+	}
+	if options.Installation {
+		check("Runner Secret runner.yaml (contents withheld)", doctorRunnerSecret(ctx, cfg, client))
+		check("mounted controller config.yaml", doctorMountedConfig(ctx, cfg, client))
+		quotas, err := client.CoreV1().ResourceQuotas(cfg.Kubernetes.LeaseNamespace).List(ctx, metav1.ListOptions{})
+		check("installation namespace quotas", err)
+		if err == nil {
+			for i := range quotas.Items {
+				for _, message := range quotaWarnings(&quotas.Items[i], deployment.InstallationBudget()) {
+					warn("installation: " + message)
+				}
+			}
+		}
+	}
 	for _, rule := range doctorAccessRules(cfg) {
 		name := fmt.Sprintf("RBAC %s %s/%s %s", rule.Verb, rule.Namespace, rule.Resource, rule.Name)
 		check(name, doctorAccess(ctx, client, rule))
 	}
 	write("Doctor is read-only; use separate live scenarios to verify admission denials, NetworkPolicy isolation, scheduling, image pulls and Runner execution.\n")
+	write("Result: %d passed, %d warnings, %d failures (strict=%t).\n", passed, warnings, len(failures), options.Strict)
 	if len(failures) != 0 {
 		return errors.Join(reportErr, fmt.Errorf("doctor: %d check(s) failed: %s", len(failures), strings.Join(failures, ", ")))
 	}

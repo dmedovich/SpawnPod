@@ -1,4 +1,8 @@
-# Install and operate SpawnPod v0.1.0-rc.4
+# Install and operate SpawnPod v0.1.0-rc.5
+
+For the complete first-run sequence, resource preflight, private Runner Secret
+creation, image pull troubleshooting and a real workflow, use the
+[Forgejo + K3s quickstart](QUICKSTART-K3S.md).
 
 Supported platform: Linux/amd64, one active controller. Start with a test
 cluster. Review the [security model](SECURITY.md) and
@@ -30,15 +34,15 @@ directory (amd64 shown).
 
 ```sh
 sha256sum -c SHA256SUMS
-tar -xzf spawnpod_v0.1.0-rc.4_linux_amd64.tar.gz
-cd spawnpod_v0.1.0-rc.4_linux_amd64
+tar -xzf spawnpod_v0.1.0-rc.5_linux_amd64.tar.gz
+cd spawnpod_v0.1.0-rc.5_linux_amd64
 sha256sum -c BINARY_SHA256SUMS
 ./spawnpod version
 ./spawnpod-agent version
 ./spawnpod-source-proxy version
 ```
 
-All three commands should print `v0.1.0-rc.4`. Checksums detect corruption.
+All three commands should print `v0.1.0-rc.5`. Checksums detect corruption.
 Archives created by the tag workflow have GitHub build and SBOM attestations;
 verify one with `gh attestation verify ARCHIVE -R dmedovich/SpawnPod`.
 `release.json` identifies the source revision and whether it was dirty. Published packages must have
@@ -53,9 +57,9 @@ provenance attestations. See [release verification](RELEASE.md#publish).
 Alternatively build from this extracted package and push to your own registry:
 
 ```sh
-podman build --build-arg VERSION=v0.1.0-rc.4 \
-  -f deploy/release/runtime.Dockerfile -t registry.example.com/spawnpod:v0.1.0-rc.4 .
-podman push registry.example.com/spawnpod:v0.1.0-rc.4
+podman build --build-arg VERSION=v0.1.0-rc.5 \
+  -f deploy/release/runtime.Dockerfile -t registry.example.com/spawnpod:v0.1.0-rc.5 .
+podman push registry.example.com/spawnpod:v0.1.0-rc.5
 ```
 
 Record the registry manifest digest and use the immutable
@@ -68,10 +72,10 @@ For an offline single-node K3s installation, import the downloaded OCI
 archive, inspect its manifest digest, and tag the exact named digest:
 
 ```sh
-sudo k3s ctr -n k8s.io images import --digests ../spawnpod_v0.1.0-rc.4_linux_amd64.oci.tar
+sudo k3s ctr -n k8s.io images import --digests ../spawnpod_v0.1.0-rc.5_linux_amd64.oci.tar
 sudo k3s ctr -n k8s.io images list
 # Replace DIGEST below with the manifest digest recorded in the release.
-sudo k3s ctr -n k8s.io images tag localhost/spawnpod:v0.1.0-rc.4 \
+sudo k3s ctr -n k8s.io images tag localhost/spawnpod:v0.1.0-rc.5 \
   localhost/spawnpod@sha256:DIGEST
 ```
 
@@ -175,13 +179,17 @@ the target node before raising job concurrency.
 4. Apply the install manifest. Recreate and Lease election ensure one active
    controller; config checksum changes trigger a new Pod. Repeat doctor,
    smoke and a real workflow before re-enabling scheduling.
-5. For rollback, restore the matching old config, admission and image digests
+5. For rollback, restore the matching old config, admission, NetworkPolicy and image digests
    together, then rerun checks. The local rc.1/rc.2 controller compatibility
    check uses drained records and the current agent image; it does not migrate
    running jobs or make the old vulnerable agent safe. Record schemas 1 and 2
    are readable; unknown
    future schemas fail closed. Do not downgrade across an untested schema
    change or delete records to force startup.
+   Controllers through rc.4 require the original default-deny selector
+   `spawnpod.dev/managed: "true"`; restore that baseline while drained before
+   rolling back from a namespace-wide policy. Omit `tombstoneRetention` from
+   configs used by older controllers, which reject unknown fields.
 6. Rotate Runner credentials by replacing the private Secret and restarting
    the Deployment while quiesced. Kubernetes projected tokens rotate
    automatically. Review source-route pins and CA expiry independently.
@@ -193,3 +201,13 @@ The controller retries owned cleanup. Restore API access or restart the
 controller to reconcile interrupted environments; never remove unverified
 foreign resources. Uninstall only after jobs are drained and resources
 cleaned, and preserve state until recovery is no longer needed.
+
+Cleaned ConfigMaps are durable retry tombstones. They retain only management
+metadata and expire after `controller.tombstoneRetention` (default `24h`,
+configurable from `1m` to `24h`) on a successful reconcile sweep. For small
+ConfigMap quotas choose a shorter retention or a budget sized for the number
+of jobs completed during that period. `inspect` reports `retained_until`, Pod
+presence and the record-level cleanup decision. `doctor --strict` fails on
+quota headroom or local-image warnings; `doctor --installation` additionally
+checks the Runner Secret key, mounted config and infra quota with operator
+credentials. See the quickstart for identity and quota limitations.

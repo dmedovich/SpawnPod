@@ -48,13 +48,13 @@ func checkServicePolicyIdentity(policy *networkingv1.NetworkPolicy, name, enviro
 	return nil
 }
 
-// BuildDefaultDenyPolicy selects every spawnPod-managed Pod, including Pods
+// BuildDefaultDenyPolicy selects every Pod in the workload namespace, including Pods
 // created before individual service policies are installed.
 func BuildDefaultDenyPolicy() *networkingv1.NetworkPolicy {
 	return &networkingv1.NetworkPolicy{
 		ObjectMeta: metav1.ObjectMeta{Name: DefaultDenyPolicyName},
 		Spec: networkingv1.NetworkPolicySpec{
-			PodSelector: metav1.LabelSelector{MatchLabels: map[string]string{ownerLabel: "true"}},
+			PodSelector: metav1.LabelSelector{},
 			PolicyTypes: []networkingv1.PolicyType{networkingv1.PolicyTypeIngress, networkingv1.PolicyTypeEgress},
 		},
 	}

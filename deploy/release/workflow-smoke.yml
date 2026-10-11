@@ -1,0 +1,13 @@
+name: SpawnPod Smoke Test
+on:
+  workflow_dispatch:
+jobs:
+  smoke:
+    runs-on: spawnpod
+    steps:
+      - name: Verify execution
+        run: |
+          id
+          uname -m
+          pwd
+          echo "SpawnPod smoke test passed"

@@ -9,7 +9,7 @@ import (
 func TestServicePoliciesSelectOnlyMatchingJobAndService(t *testing.T) {
 	spec := validServiceSpec()
 	deny := BuildDefaultDenyPolicy()
-	if deny.Name != DefaultDenyPolicyName || deny.Spec.PodSelector.MatchLabels[ownerLabel] != "true" || len(deny.Spec.PolicyTypes) != 2 || len(deny.Spec.Ingress) != 0 || len(deny.Spec.Egress) != 0 {
+	if deny.Name != DefaultDenyPolicyName || len(deny.Spec.PodSelector.MatchLabels) != 0 || len(deny.Spec.PodSelector.MatchExpressions) != 0 || len(deny.Spec.PolicyTypes) != 2 || len(deny.Spec.Ingress) != 0 || len(deny.Spec.Egress) != 0 {
 		t.Fatal("default deny does not cover managed Pods in both directions")
 	}
 	egress, ingress, err := BuildServicePolicies(spec)

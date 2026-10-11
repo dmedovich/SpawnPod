@@ -33,7 +33,7 @@ permits sequential command execution and file transfer.
 | Executing | The command result is uncertain; reconcile cleanup |
 | Transferring | The workspace may be incomplete; reconcile cleanup |
 | Indeterminate / failed / terminating | Retry cleanup |
-| Cleaned | Keep a tombstone for at least 24 hours, then expire it |
+| Cleaned | Keep a tombstone for `controller.tombstoneRetention` (default 24h), then expire it |
 
 Commands with uncertain results are never automatically replayed. Per-environment
 operation slots prevent simultaneous commands. Removal cancels active work and

@@ -51,6 +51,33 @@ func TestInstallationIsCredentialSeparatedAndRestartSafe(t *testing.T) {
 		t.Fatal("unsafe rollout strategy")
 	}
 	spec := d.Spec.Template.Spec
+	for _, volume := range spec.Volumes {
+		if volume.Name == "runner" && (volume.Secret == nil || len(volume.Secret.Items) != 1 || volume.Secret.Items[0].Key != "runner.yaml" || volume.Secret.Items[0].Path != "runner.yaml") {
+			t.Fatal("Runner Secret does not require the runner.yaml key")
+		}
+	}
+	budget := InstallationBudget()
+	for _, pair := range []struct {
+		key      corev1.ResourceName
+		requests bool
+		name     corev1.ResourceName
+	}{
+		{corev1.ResourceRequestsCPU, true, corev1.ResourceCPU}, {corev1.ResourceLimitsCPU, false, corev1.ResourceCPU},
+		{corev1.ResourceRequestsMemory, true, corev1.ResourceMemory}, {corev1.ResourceLimitsMemory, false, corev1.ResourceMemory},
+	} {
+		total := budget[pair.key].DeepCopy()
+		total.Set(0)
+		for _, container := range spec.Containers {
+			resources := container.Resources.Limits
+			if pair.requests {
+				resources = container.Resources.Requests
+			}
+			total.Add(resources[pair.name])
+		}
+		if expected := budget[pair.key]; total.Cmp(expected) != 0 {
+			t.Fatalf("doctor budget differs from rendered Deployment for %s", pair.key)
+		}
+	}
 	if *spec.AutomountServiceAccountToken || spec.ServiceAccountName != "spawnpod-controller" {
 		t.Fatal("unexpected automatic token exposure")
 	}

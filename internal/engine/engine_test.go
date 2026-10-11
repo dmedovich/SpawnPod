@@ -1,11 +1,13 @@
 package engine
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"strings"
 	"sync"
 	"testing"
@@ -742,5 +744,80 @@ func TestReconcileExpiresCleanedTombstone(t *testing.T) {
 	}
 	if _, err := store.Get(context.Background(), record.ID); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("tombstone still exists: %v", err)
+	}
+}
+
+type failingDeleteStore struct {
+	*memoryStore
+	err error
+}
+
+func (s *failingDeleteStore) Delete(ctx context.Context, id, revision string) error {
+	if s.err != nil {
+		return s.err
+	}
+	return s.memoryStore.Delete(ctx, id, revision)
+}
+
+func TestRetentionRepeatedJobsRestartAndDeleteRetry(t *testing.T) {
+	e, store, jobs := newEngine()
+	e.TombstoneRetention = 5 * time.Minute
+	var logs bytes.Buffer
+	e.Logger = slog.New(slog.NewJSONHandler(&logs, nil))
+	for i := 0; i < 3; i++ {
+		record := createReady(t, e)
+		if _, err := e.Exec(context.Background(), record.ID, supervisor.Request{Op: "run", ID: "private-command", Argv: []string{"private-script"}, Env: map[string]string{"TOKEN": "private-token"}}, func(supervisor.Event) error { return nil }); err != nil {
+			t.Fatal(err)
+		}
+		if err := e.Remove(context.Background(), record.ID); err != nil {
+			t.Fatal(err)
+		}
+		if err := e.Remove(context.Background(), record.ID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if jobs.removed != 3 {
+		t.Fatalf("non-idempotent removal: %d", jobs.removed)
+	}
+	if err := e.ReconcileOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	records, _ := store.List(context.Background())
+	if len(records) != 3 {
+		t.Fatal("recent tombstones were deleted")
+	}
+	for _, record := range records {
+		if record.State != StateCleaned || record.CleanedAt.IsZero() || record.LastCommandID != "" {
+			t.Fatalf("invalid cleaned record: %+v", record)
+		}
+		record.CleanedAt = time.Now().Add(-6 * time.Minute)
+		if _, err := store.Update(context.Background(), record); err != nil {
+			t.Fatal(err)
+		}
+	}
+	failing := &failingDeleteStore{memoryStore: store, err: errors.New("temporary delete failure")}
+	restarted := &Engine{Store: failing, Jobs: jobs, CleanupTimeout: time.Second, TombstoneRetention: 5 * time.Minute, Logger: e.Logger}
+	if err := restarted.ReconcileOnce(context.Background()); err == nil {
+		t.Fatal("lost delete error")
+	}
+	if records, _ := store.List(context.Background()); len(records) != 3 {
+		t.Fatal("failed delete lost records")
+	}
+	failing.err = nil
+	if err := restarted.ReconcileOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if records, _ := store.List(context.Background()); len(records) != 0 {
+		t.Fatal("expired records accumulated")
+	}
+	for _, event := range []string{"environment.created", "environment.ready", "execution.started", "execution.finished", "environment.cleanup.started", "environment.cleanup.completed", "environment.record.expiration.failed", "environment.record.expired", "\"exit_code\":7", "environment_id"} {
+		if !strings.Contains(logs.String(), event) {
+			t.Fatalf("missing lifecycle event %s", event)
+		}
+	}
+	for _, secret := range []string{"private-script", "private-token", "private-command"} {
+		if strings.Contains(logs.String(), secret) {
+			t.Fatal("request content leaked into logs")
+		}
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 )
 
 func example(t *testing.T) string {
@@ -13,6 +14,30 @@ func example(t *testing.T) string {
 		t.Fatal(err)
 	}
 	return string(data)
+}
+
+func TestTombstoneRetentionValidation(t *testing.T) {
+	cfg, err := Decode(strings.NewReader(example(t)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		value string
+		want  time.Duration
+		valid bool
+	}{
+		{"", 24 * time.Hour, true}, {"1m", time.Minute, true}, {"10m", 10 * time.Minute, true},
+		{"0s", 0, false}, {"59s", 0, false}, {"25h", 0, false}, {"invalid", 0, false},
+	} {
+		cfg.Controller.TombstoneRetention = tc.value
+		duration, err := cfg.TombstoneRetention()
+		if (err == nil) != tc.valid || tc.valid && duration != tc.want {
+			t.Fatalf("%q: duration=%s err=%v", tc.value, duration, err)
+		}
+		if (cfg.Validate() == nil) != tc.valid {
+			t.Fatalf("Validate ignored retention %q", tc.value)
+		}
+	}
 }
 
 func TestExampleAndStrictDecode(t *testing.T) {

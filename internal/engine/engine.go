@@ -29,14 +29,16 @@ type removal struct {
 // Engine coordinates live operations with persistent management records.
 // One active Engine instance per namespace is supported.
 type Engine struct {
-	Store          Store
-	Jobs           Jobs
-	Services       Services
-	CleanupTimeout time.Duration
-	mu             sync.Mutex
-	active         map[string]*operation
-	removals       map[string]*removal
-	incompatible   bool
+	Store              Store
+	Jobs               Jobs
+	Services           Services
+	CleanupTimeout     time.Duration
+	TombstoneRetention time.Duration
+	Logger             *slog.Logger
+	mu                 sync.Mutex
+	active             map[string]*operation
+	removals           map[string]*removal
+	incompatible       bool
 }
 
 type CreateRequest struct {
@@ -54,6 +56,13 @@ func (e *Engine) validate() error {
 		return errors.New("engine is not configured")
 	}
 	return nil
+}
+
+func (e *Engine) logger() *slog.Logger {
+	if e.Logger != nil {
+		return e.Logger
+	}
+	return slog.Default()
 }
 
 // Create persists intent before asking Kubernetes to create the Pod. Start is
@@ -165,6 +174,7 @@ func (e *Engine) Create(ctx context.Context, req CreateRequest) (Record, error) 
 	if err != nil {
 		return record, fmt.Errorf("record created job Pod: %w", err)
 	}
+	e.logger().Info("environment.created", "environment_id", id, "pod", handle.Name)
 	return record, nil
 }
 
@@ -207,13 +217,17 @@ func (e *Engine) Start(ctx context.Context, id string) (Record, error) {
 		}
 		serviceIPs[i] = ip
 	}
-	return e.change(deadlineCtx, id, []State{StateProvisioning}, func(r *Record) {
+	record, err = e.change(deadlineCtx, id, []State{StateProvisioning}, func(r *Record) {
 		r.State = StateReady
 		r.LastError = ""
 		for i := range r.Services {
 			r.Services[i].ClusterIP = serviceIPs[i]
 		}
 	})
+	if err == nil {
+		e.logger().Info("environment.ready", "environment_id", id, "pod", record.Job.Name)
+	}
+	return record, err
 }
 
 // Metadata reads process environment and architecture directly from the
@@ -273,10 +287,18 @@ func (e *Engine) Exec(ctx context.Context, id string, req supervisor.Request, on
 		}
 	}
 	deadlineCtx, stop := context.WithDeadline(opCtx, record.Deadline)
-	err = e.Jobs.Exec(deadlineCtx, record.Job, req, onEvent)
+	started := time.Now()
+	e.logger().Info("execution.started", "environment_id", id)
+	exitCode := -1
+	err = e.Jobs.Exec(deadlineCtx, record.Job, req, func(event supervisor.Event) error {
+		if event.ExitCode != nil {
+			exitCode = *event.ExitCode
+		}
+		return onEvent(event)
+	})
 	stop()
 	if err != nil {
-		slog.Error("environment command failed", "environment", id, "failure", "backend operation failed")
+		e.logger().Error("execution.failed", "environment_id", id, "failure", "backend_operation", "duration_ms", time.Since(started).Milliseconds())
 		_, _ = e.changeAfterFailure(id, []State{StateExecuting}, func(r *Record) { r.State = StateIndeterminate; r.LastError = "command transport or execution failed" })
 		leave()
 		cleanupCtx, cancel := context.WithTimeout(context.Background(), e.CleanupTimeout)
@@ -285,6 +307,9 @@ func (e *Engine) Exec(ctx context.Context, id string, req supervisor.Request, on
 		return record, err
 	}
 	record, err = e.change(opCtx, id, []State{StateExecuting}, func(r *Record) { r.State = StateReady; r.LastCommandID = "" })
+	if err == nil {
+		e.logger().Info("execution.finished", "environment_id", id, "exit_code", exitCode, "duration_ms", time.Since(started).Milliseconds())
+	}
 	leave()
 	return record, err
 }
@@ -311,7 +336,7 @@ func (e *Engine) CopyIn(ctx context.Context, id, dest string, input io.Reader) e
 	err = e.Jobs.CopyIn(deadlineCtx, record.Job, dest, input)
 	stop()
 	if err != nil {
-		slog.Error("environment file transfer failed", "environment", id, "failure", "backend operation failed")
+		e.logger().Error("environment.transfer.failed", "environment_id", id, "failure", "backend_operation")
 		_, _ = e.changeAfterFailure(id, []State{StateTransferring}, func(r *Record) { r.State = StateIndeterminate; r.LastError = "file transfer failed" })
 		leave()
 		cleanupCtx, cancel := context.WithTimeout(context.Background(), e.CleanupTimeout)
@@ -382,7 +407,7 @@ func (e *Engine) Remove(ctx context.Context, id string) error {
 	return current.err
 }
 
-func (e *Engine) removeOnce(ctx context.Context, id string) error {
+func (e *Engine) removeOnce(ctx context.Context, id string) (result error) {
 	record, err := e.Store.Get(ctx, id)
 	if err != nil {
 		return err
@@ -390,6 +415,15 @@ func (e *Engine) removeOnce(ctx context.Context, id string) error {
 	if record.State == StateCleaned {
 		return nil
 	}
+	started := time.Now()
+	e.logger().Info("environment.cleanup.started", "environment_id", id, "pod", record.Job.Name, "reason", "remove requested", "previous_state", record.State)
+	defer func() {
+		if result != nil {
+			e.logger().Error("environment.cleanup.failed", "environment_id", id, "failure", "resource_cleanup", "duration_ms", time.Since(started).Milliseconds())
+		} else {
+			e.logger().Info("environment.cleanup.completed", "environment_id", id, "duration_ms", time.Since(started).Milliseconds())
+		}
+	}()
 	record, err = e.change(ctx, id, nil, func(r *Record) { r.State = StateTerminating })
 	if err != nil {
 		return err
@@ -535,10 +569,13 @@ func (e *Engine) ReconcileOnce(ctx context.Context) error {
 	e.mu.Unlock()
 	now := time.Now()
 	for _, record := range records {
-		action, _ := PlanReconciliation(record, now)
+		action, reason := PlanReconciliationWithRetention(record, now, e.TombstoneRetention)
 		if action == ReconcileExpireTombstone {
 			if err := e.Store.Delete(ctx, record.ID, record.Revision); err != nil {
+				e.logger().Error("environment.record.expiration.failed", "environment_id", record.ID, "failure", "store_delete")
 				failures = append(failures, fmt.Errorf("expire tombstone %s: %w", record.ID, err))
+			} else {
+				e.logger().Info("environment.record.expired", "environment_id", record.ID, "reason", reason)
 			}
 			continue
 		}
@@ -556,7 +593,7 @@ func (e *Engine) ReconcileOnce(ctx context.Context) error {
 			failures = append(failures, fmt.Errorf("reconcile get %s: %w", record.ID, err))
 			continue
 		}
-		currentAction, _ := PlanReconciliation(current, time.Now())
+		currentAction, reason := PlanReconciliationWithRetention(current, time.Now(), e.TombstoneRetention)
 		checkServices := currentAction == ReconcileRetain && current.State == StateReady && len(current.Services) > 0
 		if currentAction != ReconcileRemove && !checkServices {
 			continue
@@ -588,6 +625,7 @@ func (e *Engine) ReconcileOnce(ctx context.Context) error {
 			if alive {
 				continue
 			}
+			reason = "service lost"
 		}
 		current.State = StateTerminating
 		if _, err := e.Store.Update(ctx, current); errors.Is(err, ErrConflict) || errors.Is(err, ErrNotFound) {
@@ -598,6 +636,7 @@ func (e *Engine) ReconcileOnce(ctx context.Context) error {
 			failures = append(failures, fmt.Errorf("reconcile claim %s: %w", record.ID, err))
 			continue
 		}
+		e.logger().Info("environment.reconcile.cleanup", "environment_id", record.ID, "reason", reason)
 		if err := e.Remove(ctx, record.ID); err != nil {
 			failures = append(failures, fmt.Errorf("reconcile %s: %w", record.ID, err))
 		}

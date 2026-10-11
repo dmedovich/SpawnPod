@@ -4,3 +4,5 @@ __pycache__/
 *.pyc
 dist/
 /spawnpodsdocs
+/BUG.md
+/SPAWNPOD-OPERATIONS-QOL-ROADMAP.md

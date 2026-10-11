@@ -123,6 +123,58 @@ func TestPreflightAlwaysRequiresDefaultDeny(t *testing.T) {
 	}
 }
 
+func TestDefaultDenyAcceptsOnlyCoveringSelectorsAndClosedRules(t *testing.T) {
+	cases := []struct {
+		name   string
+		change func(*networkingv1.NetworkPolicy)
+		valid  bool
+	}{
+		{"namespace", func(p *networkingv1.NetworkPolicy) {}, true},
+		{"managed", func(p *networkingv1.NetworkPolicy) {
+			p.Spec.PodSelector.MatchLabels = map[string]string{"spawnpod.dev/managed": "true"}
+		}, true},
+		{"wrong value", func(p *networkingv1.NetworkPolicy) {
+			p.Spec.PodSelector.MatchLabels = map[string]string{"spawnpod.dev/managed": "false"}
+		}, false},
+		{"subset", func(p *networkingv1.NetworkPolicy) {
+			p.Spec.PodSelector.MatchLabels = map[string]string{"spawnpod.dev/managed": "true", "app": "job"}
+		}, false},
+		{"expression", func(p *networkingv1.NetworkPolicy) {
+			p.Spec.PodSelector.MatchExpressions = []metav1.LabelSelectorRequirement{{Key: "app", Operator: metav1.LabelSelectorOpExists}}
+		}, false},
+		{"ingress allow all", func(p *networkingv1.NetworkPolicy) { p.Spec.Ingress = []networkingv1.NetworkPolicyIngressRule{{}} }, false},
+		{"egress allow all", func(p *networkingv1.NetworkPolicy) { p.Spec.Egress = []networkingv1.NetworkPolicyEgressRule{{}} }, false},
+		{"one direction", func(p *networkingv1.NetworkPolicy) {
+			p.Spec.PolicyTypes = []networkingv1.PolicyType{networkingv1.PolicyTypeEgress}
+		}, false},
+		{"duplicate direction", func(p *networkingv1.NetworkPolicy) {
+			p.Spec.PolicyTypes = []networkingv1.PolicyType{networkingv1.PolicyTypeEgress, networkingv1.PolicyTypeEgress}
+		}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			p := provider.BuildDefaultDenyPolicy()
+			tc.change(p)
+			if validDefaultDeny(p) != tc.valid {
+				t.Fatal("unexpected validation result")
+			}
+			if tc.valid {
+				cfg := exampleControllerConfig(t)
+				client := preflightClient(t, cfg)
+				if _, err := client.NetworkingV1().NetworkPolicies(cfg.Kubernetes.Namespace).Update(context.Background(), p, metav1.UpdateOptions{}); err != nil {
+					t.Fatal(err)
+				}
+				if err := Preflight(context.Background(), cfg, client); err != nil {
+					t.Fatal(err)
+				}
+			}
+		})
+	}
+	if validDefaultDeny(nil) {
+		t.Fatal("accepted missing policy")
+	}
+}
+
 func TestPreflightRejectsImageAdmissionDrift(t *testing.T) {
 	cfg := exampleControllerConfig(t)
 	client := fake.NewClientset()

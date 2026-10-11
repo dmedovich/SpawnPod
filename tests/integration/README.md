@@ -5,7 +5,7 @@ They are separate from the installation manifests in `deploy/`.
 
 | Files | Purpose |
 |---|---|
-| `acceptance/cluster_test.go`, `acceptance.config.yaml` | Admission, networking, recovery, drained upgrades and resource measurements |
+| `acceptance/cluster_test.go`, `acceptance.config.yaml` | Admission, networking, recovery, ConfigMap retention, drained upgrades and resource measurements |
 | `workflow*.yml`, `file-transfer-*` | Runner workflow and file-transfer scenarios |
 | `agent.Dockerfile`, `checkout-job.Dockerfile` | Test agent and job images |
 | `prepare-local.sh`, `install-host-k3s.sh` | Local build and cluster setup helpers |
@@ -58,3 +58,11 @@ this suite unless `SPAWNPOD_ACCEPTANCE_CONFIG` is set.
 Logs, controller output and `capacity.txt` remain in the temporary directory.
 Review them before sharing. Results and test limitations are recorded in
 [VALIDATION.md](../../docs/VALIDATION.md).
+
+`ConfigMapRetention` checks real Pod removal and resourceVersion-protected
+ConfigMap expiration after exit codes 0 and 7. It backdates only the test
+tombstone's `cleaned_at` and reconciles with a fresh Engine and one-minute TTL;
+it does not wait one real minute. The upgrade/rollback scenario switches the
+test default-deny selector while drained: managed Pods for older controllers,
+namespace-wide for the current controller. Configs read by older binaries must
+omit `tombstoneRetention`, which they do not recognize.

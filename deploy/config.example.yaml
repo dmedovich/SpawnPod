@@ -18,6 +18,8 @@ kubernetes:
     requestsStorage: 16Gi
     limitsStorage: 48Gi
 controller:
+  # Cleaned ConfigMaps are retry tombstones; shorten for small object quotas.
+  tombstoneRetention: 24h
   reconcileInterval: 30s
   cleanupTimeout: 2m
   drainTimeout: 30s

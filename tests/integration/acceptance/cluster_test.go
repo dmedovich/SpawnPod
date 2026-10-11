@@ -106,6 +106,7 @@ func TestLocalClusterAcceptance(t *testing.T) {
 	t.Run("APIOutage", c.apiOutage)
 	t.Run("ControllerCrash", c.crash)
 	t.Run("RestartStates", c.recovery)
+	t.Run("ConfigMapRetention", c.retention)
 	t.Run("ReleasedControllerUpgradeRollback", c.upgrade)
 }
 
@@ -295,7 +296,7 @@ func (c *cluster) create(t *testing.T, services bool) engine.Record {
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 		defer cancel()
-		if err := c.backend.Remove(ctx, record.ID); err != nil {
+		if err := c.backend.Remove(ctx, record.ID); err != nil && !errors.Is(err, engine.ErrNotFound) {
 			t.Error(err)
 		}
 		current, err := c.store.Get(ctx, record.ID)
@@ -706,6 +707,9 @@ func (c *cluster) rpc(t *testing.T) pb.BackendPluginClient {
 }
 
 func (c *cluster) upgrade(t *testing.T) {
+	// Older controllers require the managed-Pod selector. Restore the matching
+	// baseline while drained on both downgrade and upgrade.
+	c.setDefaultDenySelector(t, true)
 	stopOld := c.startController(t, c.previous, "old-controller")
 	client := c.rpc(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
@@ -736,6 +740,7 @@ func (c *cluster) upgrade(t *testing.T) {
 		t.Fatal(err)
 	}
 	stopOld()
+	c.setDefaultDenySelector(t, false)
 	stopNew := c.startController(t, c.current, "new-controller")
 	after, err := c.store.Get(ctx, id)
 	if err != nil || before.ID != after.ID || before.Job != after.Job || after.State != engine.StateCleaned {
@@ -766,6 +771,7 @@ func (c *cluster) upgrade(t *testing.T) {
 		t.Fatal(err)
 	}
 	stopNew()
+	c.setDefaultDenySelector(t, true)
 	stopRollback := c.startController(t, c.previous, "rollback-controller")
 	if record, err := c.store.Get(ctx, service.GetEnvironmentId()); err != nil || record.Version != 2 || record.State != engine.StateCleaned {
 		t.Fatalf("rollback record: %+v %v", record, err)
@@ -776,7 +782,68 @@ func (c *cluster) upgrade(t *testing.T) {
 		}
 	}
 	stopRollback()
+	c.setDefaultDenySelector(t, false)
 	t.Log("rc.1 -> current -> rc.1: drained v1/v2 records retained; current package RPC smoke passed")
+}
+
+func (c *cluster) setDefaultDenySelector(t *testing.T, legacy bool) {
+	t.Helper()
+	policy, err := c.admin.NetworkingV1().NetworkPolicies(c.cfg.Kubernetes.Namespace).Get(context.Background(), provider.DefaultDenyPolicyName, metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy.Spec.PodSelector = metav1.LabelSelector{}
+	if legacy {
+		policy.Spec.PodSelector.MatchLabels = map[string]string{"spawnpod.dev/managed": "true"}
+	}
+	if _, err := c.admin.NetworkingV1().NetworkPolicies(c.cfg.Kubernetes.Namespace).Update(context.Background(), policy, metav1.UpdateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func (c *cluster) retention(t *testing.T) {
+	ctx := context.Background()
+	for _, exit := range []string{"0", "7"} {
+		t.Run("exit-"+exit, func(t *testing.T) {
+			record := c.create(t, false)
+			_, code := c.command(t, record, "/bin/sh", "-c", "exit "+exit)
+			if strconv.Itoa(code) != exit {
+				t.Fatalf("unexpected exit %d", code)
+			}
+			if err := c.backend.Remove(ctx, record.ID); err != nil {
+				t.Fatal(err)
+			}
+			if err := c.backend.Remove(ctx, record.ID); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := c.admin.CoreV1().Pods(c.cfg.Kubernetes.Namespace).Get(ctx, record.Job.Name, metav1.GetOptions{}); !apierrors.IsNotFound(err) {
+				t.Fatalf("Pod remained after cleanup: %v", err)
+			}
+			fresh := &engine.Engine{Store: c.store, Jobs: c.jobs, CleanupTimeout: cleanupDuration(c.cfg), TombstoneRetention: time.Minute}
+			if err := fresh.ReconcileOnce(ctx); err != nil {
+				t.Fatal(err)
+			}
+			cleaned, err := c.store.Get(ctx, record.ID)
+			if err != nil || cleaned.State != engine.StateCleaned || cleaned.CleanedAt.IsZero() {
+				t.Fatalf("missing recent tombstone: %v", err)
+			}
+			// Move only the test record's clock; exercise actual API deletion and
+			// its resourceVersion precondition without waiting a full minute.
+			cleaned.CleanedAt = time.Now().Add(-2 * time.Minute)
+			if _, err := c.store.Update(ctx, cleaned); err != nil {
+				t.Fatal(err)
+			}
+			if err := fresh.ReconcileOnce(ctx); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := c.store.Get(ctx, record.ID); !errors.Is(err, engine.ErrNotFound) {
+				t.Fatalf("expired record remains: %v", err)
+			}
+			if err := fresh.ReconcileOnce(ctx); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
 }
 
 func cleanupDuration(cfg config.Config) time.Duration { value, _ := cfg.CleanupTimeout(); return value }

@@ -24,6 +24,30 @@ var pinned = regexp.MustCompile(`^[a-z0-9][a-z0-9._:/-]*@sha256:[a-f0-9]{64}$`)
 
 func ptr[T any](v T) *T { return &v }
 
+func containerResources() corev1.ResourceRequirements {
+	return corev1.ResourceRequirements{
+		Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("100m"), corev1.ResourceMemory: resource.MustParse("128Mi")},
+		Limits:   corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("1"), corev1.ResourceMemory: resource.MustParse("512Mi")},
+	}
+}
+
+// InstallationBudget uses the same container resources as Render. The reference
+// Deployment uses Recreate, so a rollout does not request a surge replica.
+func InstallationBudget() corev1.ResourceList {
+	budget := corev1.ResourceList{"count/pods": resource.MustParse("1"), "pods": resource.MustParse("1")}
+	for _, prefix := range []string{"requests.", "limits."} {
+		r := containerResources().Requests
+		if prefix == "limits." {
+			r = containerResources().Limits
+		}
+		for name, value := range r {
+			value.Add(value.DeepCopy())
+			budget[corev1.ResourceName(prefix+string(name))] = value
+		}
+	}
+	return budget
+}
+
 // Render omits host kubeconfig paths and references an operator-created Secret.
 // Only the controller receives a projected Kubernetes token; Runner does not.
 func Render(cfg config.Config, controllerImage, runnerImage string) ([]byte, error) {
@@ -48,11 +72,8 @@ func Render(cfg config.Config, controllerImage, runnerImage string) ([]byte, err
 	}
 	cm := &corev1.ConfigMap{TypeMeta: metav1.TypeMeta{APIVersion: "v1", Kind: "ConfigMap"}, ObjectMeta: metav1.ObjectMeta{Name: "spawnpod-config", Namespace: "infra"}, Data: map[string]string{"config.yaml": string(content)}}
 	security := &corev1.SecurityContext{RunAsNonRoot: ptr(true), RunAsUser: ptr(int64(10001)), RunAsGroup: ptr(int64(10001)), ReadOnlyRootFilesystem: ptr(true), AllowPrivilegeEscalation: ptr(false), Capabilities: &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}}, SeccompProfile: &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault}}
-	resources := func(cpu, mem string) corev1.ResourceRequirements {
-		return corev1.ResourceRequirements{Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse(cpu), corev1.ResourceMemory: resource.MustParse(mem)}, Limits: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("1"), corev1.ResourceMemory: resource.MustParse("512Mi")}}
-	}
 	socketMount := corev1.VolumeMount{Name: "socket", MountPath: "/run/spawnpod"}
-	controller := corev1.Container{Name: "controller", Image: controllerImage, Command: []string{"/spawnpod"}, Args: []string{"serve", "--config", "/etc/spawnpod/config.yaml"}, SecurityContext: security.DeepCopy(), Resources: resources("100m", "128Mi"), Ports: []corev1.ContainerPort{{Name: "monitor", ContainerPort: 9090}}, VolumeMounts: []corev1.VolumeMount{socketMount, {Name: "config", MountPath: "/etc/spawnpod", ReadOnly: true}, {Name: "api", MountPath: "/var/run/secrets/kubernetes.io/serviceaccount", ReadOnly: true}, {Name: "controller-tmp", MountPath: "/tmp"}}}
+	controller := corev1.Container{Name: "controller", Image: controllerImage, Command: []string{"/spawnpod"}, Args: []string{"serve", "--config", "/etc/spawnpod/config.yaml"}, SecurityContext: security.DeepCopy(), Resources: containerResources(), Ports: []corev1.ContainerPort{{Name: "monitor", ContainerPort: 9090}}, VolumeMounts: []corev1.VolumeMount{socketMount, {Name: "config", MountPath: "/etc/spawnpod", ReadOnly: true}, {Name: "api", MountPath: "/var/run/secrets/kubernetes.io/serviceaccount", ReadOnly: true}, {Name: "controller-tmp", MountPath: "/tmp"}}}
 	probe := func(path string) *corev1.Probe {
 		return &corev1.Probe{ProbeHandler: corev1.ProbeHandler{HTTPGet: &corev1.HTTPGetAction{Path: path, Port: intstr.FromString("monitor")}}, PeriodSeconds: 5, TimeoutSeconds: 2, FailureThreshold: 3}
 	}
@@ -60,14 +81,14 @@ func Render(cfg config.Config, controllerImage, runnerImage string) ([]byte, err
 	controller.ReadinessProbe = probe("/readyz")
 	controller.StartupProbe = probe("/healthz")
 	controller.StartupProbe.FailureThreshold = 24
-	runner := corev1.Container{Name: "runner", Image: runnerImage, Command: []string{"/bin/sh"}, Args: []string{"-ec", "until test -S /run/spawnpod/private/backend.sock; do sleep 1; done; exec /bin/forgejo-runner --config /etc/runner/runner.yaml daemon"}, SecurityContext: security.DeepCopy(), Resources: resources("100m", "128Mi"), Env: []corev1.EnvVar{{Name: "HOME", Value: "/home/runner"}}, VolumeMounts: []corev1.VolumeMount{socketMount, {Name: "runner", MountPath: "/etc/runner", ReadOnly: true}, {Name: "runner-home", MountPath: "/home/runner"}, {Name: "runner-tmp", MountPath: "/tmp"}}}
+	runner := corev1.Container{Name: "runner", Image: runnerImage, Command: []string{"/bin/sh"}, Args: []string{"-ec", "until test -S /run/spawnpod/private/backend.sock; do sleep 1; done; exec /bin/forgejo-runner --config /etc/runner/runner.yaml daemon"}, SecurityContext: security.DeepCopy(), Resources: containerResources(), Env: []corev1.EnvVar{{Name: "HOME", Value: "/home/runner"}}, VolumeMounts: []corev1.VolumeMount{socketMount, {Name: "runner", MountPath: "/etc/runner", ReadOnly: true}, {Name: "runner-home", MountPath: "/home/runner"}, {Name: "runner-tmp", MountPath: "/tmp"}}}
 	empty := func(name string) corev1.Volume {
 		return corev1.Volume{Name: name, VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{SizeLimit: ptr(resource.MustParse("1Gi"))}}}
 	}
 	volumes := []corev1.Volume{
 		empty("socket"), empty("controller-tmp"), empty("runner-tmp"), empty("runner-home"),
 		{Name: "config", VolumeSource: corev1.VolumeSource{ConfigMap: &corev1.ConfigMapVolumeSource{LocalObjectReference: corev1.LocalObjectReference{Name: "spawnpod-config"}}}},
-		{Name: "runner", VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{SecretName: "spawnpod-runner", DefaultMode: ptr(int32(0440))}}},
+		{Name: "runner", VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{SecretName: "spawnpod-runner", DefaultMode: ptr(int32(0440)), Items: []corev1.KeyToPath{{Key: "runner.yaml", Path: "runner.yaml"}}}}},
 		{Name: "api", VolumeSource: corev1.VolumeSource{Projected: &corev1.ProjectedVolumeSource{
 			DefaultMode: ptr(int32(0440)), Sources: []corev1.VolumeProjection{
 				{ServiceAccountToken: &corev1.ServiceAccountTokenProjection{Path: "token", ExpirationSeconds: ptr(int64(3600))}},
@@ -83,6 +104,7 @@ func Render(cfg config.Config, controllerImage, runnerImage string) ([]byte, err
 	service := &corev1.Service{TypeMeta: metav1.TypeMeta{APIVersion: "v1", Kind: "Service"}, ObjectMeta: metav1.ObjectMeta{Name: "spawnpod-monitor", Namespace: "infra"}, Spec: corev1.ServiceSpec{Type: corev1.ServiceTypeClusterIP, Selector: labels, Ports: []corev1.ServicePort{{Name: "monitor", Port: 9090, TargetPort: intstr.FromString("monitor")}}}}
 	var out bytes.Buffer
 	fmt.Fprintf(&out, "# Generated installation; %s-second termination budget.\n", strconv.FormatInt(*deploy.Spec.Template.Spec.TerminationGracePeriodSeconds, 10))
+	out.WriteString("# Each container: requests cpu=100m memory=128Mi; limits cpu=1 memory=512Mi.\n# Pod total: requests cpu=200m memory=256Mi; limits cpu=2 memory=1Gi; rollout=Recreate (no surge).\n")
 	for index, obj := range []any{cm, deploy, service} {
 		b, err := syaml.Marshal(obj)
 		if err != nil {

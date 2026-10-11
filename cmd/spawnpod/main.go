@@ -50,11 +50,16 @@ func run(args []string) error {
 		runnerImage = flags.String("runner-image", "", "digest-pinned official Forgejo Runner v13.1.0 image")
 	}
 	asController := flags.Bool("as-controller", false, "impersonate the controller ServiceAccount with an admin kubeconfig")
+	strict := flags.Bool("strict", false, "doctor: treat warnings as failures")
+	installation := flags.Bool("installation", false, "doctor: also check Runner Secret, mounted config and infra quota using operator credentials")
 	if err := flags.Parse(args[1:]); err != nil {
 		return err
 	}
 	if *path == "" || flags.NArg() != 0 || (*asController && args[0] != "doctor" && args[0] != "serve") {
 		return errors.New("--config PATH is required; --as-controller is available only for doctor and serve")
+	}
+	if (*strict || *installation) && args[0] != "doctor" || *installation && *asController {
+		return errors.New("--strict and --installation require doctor; --installation uses operator credentials, without --as-controller")
 	}
 	cfg, err := config.Load(*path)
 	if err != nil {
@@ -100,7 +105,7 @@ func run(args []string) error {
 	if args[0] == "doctor" {
 		checkCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 		defer cancel()
-		return controller.Doctor(checkCtx, cfg, client, os.Stdout)
+		return controller.DoctorWithOptions(checkCtx, cfg, client, os.Stdout, controller.DoctorOptions{Strict: *strict, Installation: *installation})
 	}
 	return controller.Run(ctx, cfg, client, restConfig, slog.Default())
 }
@@ -157,12 +162,13 @@ func runEnvironments(args []string) error {
 	defer stop()
 	checkCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
+	retention, _ := cfg.TombstoneRetention()
 	switch command {
 	case "list":
 		return controller.ListEnvironments(checkCtx, client, cfg.Kubernetes.Namespace, os.Stdout)
 	case "inspect":
-		return controller.InspectEnvironment(checkCtx, client, cfg.Kubernetes.Namespace, flags.Arg(0), os.Stdout)
+		return controller.InspectEnvironment(checkCtx, client, cfg.Kubernetes.Namespace, flags.Arg(0), os.Stdout, retention)
 	default:
-		return controller.PreviewCleanup(checkCtx, client, cfg.Kubernetes.Namespace, time.Now(), os.Stdout)
+		return controller.PreviewCleanup(checkCtx, client, cfg.Kubernetes.Namespace, time.Now(), os.Stdout, retention)
 	}
 }

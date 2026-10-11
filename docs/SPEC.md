@@ -1,6 +1,6 @@
 # SpawnPod release specification
 
-Version: **v0.1.0-rc.4**. See [architecture](ARCHITECTURE.md) for components
+Version: **v0.1.0-rc.5**. See [architecture](ARCHITECTURE.md) for components
 and [security](SECURITY.md) for syscall restrictions and the trust model.
 
 ## Supported platforms and integration
@@ -69,7 +69,8 @@ State transitions are implemented in `internal/engine`. Ready environments
 support sequential commands. Interrupted provisioning, execution or transfer
 is cleaned during reconciliation; uncertain commands are never replayed.
 Resource operations verify ownership and recorded UIDs. Cleaned records are
-retained for at least 24 hours before expiration. API outages can postpone
+retained for `controller.tombstoneRetention` (default 24 hours, configurable
+from 1 minute to 24 hours) before expiration. API outages can postpone
 cleanup; retries and local command deadlines bound the behavior available
 while the control plane is unreachable.
 
