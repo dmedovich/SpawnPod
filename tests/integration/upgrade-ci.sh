@@ -37,6 +37,7 @@ trap 'report_failure "$LINENO"' ERR
 
 for component in spawnpod spawnpod-agent spawnpod-source-proxy; do
   CGO_ENABLED=0 go build -trimpath -o "$evidence/runtime/$component" "./cmd/$component"
+  chmod 755 "$evidence/runtime/$component"
 done
 podman build -f deploy/release/runtime.Dockerfile -t localhost/spawnpod:upgrade-ci "$evidence/runtime" > "$evidence/build.log" 2>&1
 podman save --format oci-archive -o "$evidence/runtime.oci.tar" localhost/spawnpod:upgrade-ci
