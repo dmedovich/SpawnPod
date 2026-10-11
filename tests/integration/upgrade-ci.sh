@@ -15,6 +15,22 @@ previous_version=v0.1.0-rc.4
 k3s_version=v1.34.12+k3s1
 runner_image=data.forgejo.org/forgejo/runner@sha256:96af81b1b0cd928f3f135fb8dc021d47cff868c151a4fd28af971e892990ee7a
 forgejo_image=codeberg.org/forgejo/forgejo@sha256:91a5310c86934339e16bd06b6078aada836e3d8935b2d70f6598108cbfaed5d1
+stage=build
+# Public check annotations remain readable when downloading Actions logs needs
+# authentication. Never include private Forgejo configuration or API responses.
+report_failure() {
+  local failed_line=$1
+  printf '::error title=Upgrade bootstrap failed::Stage %s, script line %s\n' "$stage" "$failed_line"
+  if [[ "$stage" == build && -f "$evidence/build.log" ]]; then
+    python3 - "$evidence/build.log" <<'PY'
+import pathlib, sys
+message = '\n'.join(pathlib.Path(sys.argv[1]).read_text(errors='replace').splitlines()[-20:])
+message = message.replace('%', '%25').replace('\r', '%0D').replace('\n', '%0A')
+print('::error title=Container build diagnostic::' + message)
+PY
+  fi
+}
+trap 'report_failure "$LINENO"' ERR
 
 for component in spawnpod spawnpod-agent spawnpod-source-proxy; do
   CGO_ENABLED=0 go build -trimpath -o "$evidence/runtime/$component" "./cmd/$component"
@@ -25,6 +41,7 @@ podman build -f tests/integration/upgrade-job.Dockerfile -t localhost/spawnpod-c
 podman save --format oci-archive -o "$evidence/job.oci.tar" localhost/spawnpod-ci-job:upgrade-ci
 
 previous_package="spawnpod_${previous_version}_linux_amd64"
+stage=previous-release-download
 release_url="https://github.com/dmedovich/SpawnPod/releases/download/$previous_version"
 for asset in "$previous_package.tar.gz" "$previous_package.oci.tar" SHA256SUMS IMAGE_DIGEST; do
   curl -fsSL --retry 3 "$release_url/$asset" -o "$evidence/$asset"
@@ -33,6 +50,7 @@ done
 tar -xzf "$evidence/$previous_package.tar.gz" -C "$evidence"
 
 k3s_url="https://github.com/k3s-io/k3s/releases/download/$k3s_version"
+stage=k3s-bootstrap
 curl -fsSL --retry 3 "$k3s_url/k3s" -o "$evidence/k3s"
 curl -fsSL --retry 3 "$k3s_url/sha256sum-amd64.txt" -o "$evidence/k3s-checksums"
 (cd "$evidence"; awk '$2 == "k3s" {print}' k3s-checksums > k3s-checksum; test "$(wc -l < k3s-checksum)" = 1; sha256sum -c k3s-checksum)
@@ -71,10 +89,12 @@ previous_image=$(cat "$evidence/IMAGE_DIGEST")
 sudo k3s ctr -n k8s.io images tag "localhost/spawnpod:$previous_version" "$previous_image"
 
 # Existing admission is required by the acceptance suite so it can restore it.
+stage=baseline-admission
 kubectl apply -f deploy/security.yaml
 "$evidence/runtime/spawnpod" render-admission --config deploy/config.example.yaml > "$evidence/baseline-admission.yaml"
 kubectl apply -f "$evidence/baseline-admission.yaml"
 
+stage=forgejo-bootstrap
 podman run -d --name spawnpod-upgrade-ci -p 127.0.0.1:3000:3000 \
   -e FORGEJO__actions__ENABLED=true "$forgejo_image"
 for attempt in $(seq 1 120); do
@@ -119,5 +139,6 @@ export SPAWNPOD_ACCEPTANCE_PREVIOUS_IMAGE="$previous_image"
 export SPAWNPOD_ACCEPTANCE_RUNNER_IMAGE="$runner_image"
 export SPAWNPOD_ACCEPTANCE_RUNNER_CONFIG="$evidence/runner.yaml"
 export SPAWNPOD_ACCEPTANCE_FORGEJO_TOKEN="$evidence/forgejo-api-token"
+stage=acceptance
 go test -v -count=1 -timeout=20m ./tests/integration/acceptance \
   -run 'TestLocalClusterAcceptance/(AdmissionRoundTripDiagnostics|BundleUpgradeAndRecovery)$' | tee "$evidence/acceptance.log"
