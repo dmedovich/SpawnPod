@@ -1,4 +1,4 @@
-# Install and operate SpawnPod v0.1.0-rc.5
+# Install and operate SpawnPod v0.1.0-rc.6
 
 For the complete first-run sequence, resource preflight, private Runner Secret
 creation, image pull troubleshooting and a real workflow, use the
@@ -34,15 +34,15 @@ directory (amd64 shown).
 
 ```sh
 sha256sum -c SHA256SUMS
-tar -xzf spawnpod_v0.1.0-rc.5_linux_amd64.tar.gz
-cd spawnpod_v0.1.0-rc.5_linux_amd64
+tar -xzf spawnpod_v0.1.0-rc.6_linux_amd64.tar.gz
+cd spawnpod_v0.1.0-rc.6_linux_amd64
 sha256sum -c BINARY_SHA256SUMS
 ./spawnpod version
 ./spawnpod-agent version
 ./spawnpod-source-proxy version
 ```
 
-All three commands should print `v0.1.0-rc.5`. Checksums detect corruption.
+All three commands should print `v0.1.0-rc.6`. Checksums detect corruption.
 Archives created by the tag workflow have GitHub build and SBOM attestations;
 verify one with `gh attestation verify ARCHIVE -R dmedovich/SpawnPod`.
 `release.json` identifies the source revision and whether it was dirty. Published packages must have
@@ -57,9 +57,9 @@ provenance attestations. See [release verification](RELEASE.md#publish).
 Alternatively build from this extracted package and push to your own registry:
 
 ```sh
-podman build --build-arg VERSION=v0.1.0-rc.5 \
-  -f deploy/release/runtime.Dockerfile -t registry.example.com/spawnpod:v0.1.0-rc.5 .
-podman push registry.example.com/spawnpod:v0.1.0-rc.5
+podman build --build-arg VERSION=v0.1.0-rc.6 \
+  -f deploy/release/runtime.Dockerfile -t registry.example.com/spawnpod:v0.1.0-rc.6 .
+podman push registry.example.com/spawnpod:v0.1.0-rc.6
 ```
 
 Record the registry manifest digest and use the immutable
@@ -72,10 +72,10 @@ For an offline single-node K3s installation, import the downloaded OCI
 archive, inspect its manifest digest, and tag the exact named digest:
 
 ```sh
-sudo k3s ctr -n k8s.io images import --digests ../spawnpod_v0.1.0-rc.5_linux_amd64.oci.tar
+sudo k3s ctr -n k8s.io images import --digests ../spawnpod_v0.1.0-rc.6_linux_amd64.oci.tar
 sudo k3s ctr -n k8s.io images list
 # Replace DIGEST below with the manifest digest recorded in the release.
-sudo k3s ctr -n k8s.io images tag localhost/spawnpod:v0.1.0-rc.5 \
+sudo k3s ctr -n k8s.io images tag localhost/spawnpod:v0.1.0-rc.6 \
   localhost/spawnpod@sha256:DIGEST
 ```
 
@@ -211,3 +211,9 @@ presence and the record-level cleanup decision. `doctor --strict` fails on
 quota headroom or local-image warnings; `doctor --installation` additionally
 checks the Runner Secret key, mounted config and infra quota with operator
 credentials. See the quickstart for identity and quota limitations.
+
+## Upcoming declarative upgrade tooling
+
+The rc.6 upgrade workflow generates and checks a coordinated installation
+bundle. See [UPGRADES.md](UPGRADES.md) for phase gates, explicit GitOps application,
+image verification limits and recovery. These commands are not in rc.5 binaries.

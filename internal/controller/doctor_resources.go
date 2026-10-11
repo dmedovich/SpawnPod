@@ -3,6 +3,7 @@ package controller
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"sort"
@@ -10,7 +11,6 @@ import (
 
 	"github.com/dmedovich/spawnpod/internal/config"
 	provider "github.com/dmedovich/spawnpod/internal/provider/kubernetes"
-	yaml "go.yaml.in/yaml/v3"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -70,6 +70,11 @@ func podBudget(pod *corev1.Pod) corev1.ResourceList {
 			budget[corev1.ResourceName(prefix+string(key))] = value
 		}
 	}
+	for _, name := range []corev1.ResourceName{corev1.ResourceCPU, corev1.ResourceMemory, corev1.ResourceEphemeralStorage} {
+		if value, ok := budget[corev1.ResourceName("requests."+string(name))]; ok {
+			budget[name] = value.DeepCopy()
+		}
+	}
 	return budget
 }
 
@@ -95,7 +100,11 @@ func quotaWarnings(quota *corev1.ResourceQuota, need corev1.ResourceList) []stri
 		free.Sub(used)
 		required := need[name]
 		if required.Cmp(free) > 0 {
-			warnings = append(warnings, fmt.Sprintf("quota %s %s: available=%s required=%s; wait for cleanup, shorten controller.tombstoneRetention for cleaned records, or review namespace budget before rollout", quota.Name, key, free.String(), required.String()))
+			hint := "wait for active workloads to finish or review namespace budget"
+			if key == "count/configmaps" {
+				hint = "review cleaned record retention or namespace ConfigMap budget"
+			}
+			warnings = append(warnings, fmt.Sprintf("quota %s %s: available=%s required=%s; %s", quota.Name, key, free.String(), required.String(), hint))
 		}
 	}
 	return warnings
@@ -121,21 +130,19 @@ func doctorMountedConfig(ctx context.Context, cfg config.Config, client kubernet
 	if err != nil {
 		return errors.New("spawnpod-config requires valid config.yaml; regenerate with render-deployment")
 	}
-	// These values are deliberately normalized by the installation renderer.
-	cfg.Kubernetes.Kubeconfig = ""
-	cfg.Controller.SocketPath = "/run/spawnpod/private/backend.sock"
-	cfg.Controller.MonitorAddress = ":9090"
-	// Canonical YAML treats absent and empty maps alike after a render/decode.
-	expected, err := yaml.Marshal(cfg)
-	if err != nil {
-		return errors.New("cannot serialize operator config")
+	if mounted.Kubernetes.Kubeconfig != "" || mounted.Controller.SocketPath != "/run/spawnpod/private/backend.sock" || mounted.Controller.MonitorAddress != ":9090" {
+		return errors.New("mounted config runtime paths differ from installation contract")
 	}
-	actual, err := yaml.Marshal(mounted)
+	expected, err := config.InstallationBytes(cfg)
 	if err != nil {
-		return errors.New("cannot serialize mounted config")
+		return errors.New("cannot normalize operator config")
+	}
+	actual, err := config.InstallationBytes(mounted)
+	if err != nil {
+		return errors.New("cannot normalize mounted config")
 	}
 	if !bytes.Equal(actual, expected) {
-		return errors.New("mounted config.yaml differs from operator config; regenerate with render-deployment")
+		return errors.Join(fmt.Errorf("mounted config.yaml differs from operator config (expected sha256:%x; actual sha256:%x); regenerate the installation bundle", sha256.Sum256(expected), sha256.Sum256(actual)), Preflight(ctx, mounted, client))
 	}
-	return nil
+	return Preflight(ctx, mounted, client)
 }

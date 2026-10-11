@@ -72,7 +72,7 @@ archive with `gh attestation verify ARCHIVE -R dmedovich/SpawnPod`. Verify the
 image reference recorded in `GHCR_DIGEST` with:
 
 ```sh
-release_version=v0.1.0-rc.5 # replace with the downloaded release tag
+release_version=v0.1.0-rc.6 # replace with the downloaded release tag
 cosign verify "$(cat GHCR_DIGEST)" \
   --certificate-identity "https://github.com/dmedovich/SpawnPod/.github/workflows/release.yml@refs/tags/$release_version" \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com

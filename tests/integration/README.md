@@ -66,3 +66,42 @@ it does not wait one real minute. The upgrade/rollback scenario switches the
 test default-deny selector while drained: managed Pods for older controllers,
 namespace-wide for the current controller. Configs read by older binaries must
 omit `tombstoneRetention`, which they do not recognize.
+
+## Containerized bundle upgrade and real Forgejo recovery
+
+`BundleUpgradeAndRecovery` additionally requires:
+
+```sh
+export SPAWNPOD_ACCEPTANCE_PREVIOUS_IMAGE=localhost/spawnpod@sha256:OLD_RUNTIME_DIGEST
+export SPAWNPOD_ACCEPTANCE_RUNNER_IMAGE=data.forgejo.org/forgejo/runner@sha256:RUNNER_DIGEST
+export SPAWNPOD_ACCEPTANCE_RUNNER_CONFIG=/PRIVATE/PATH/runner.yaml
+export SPAWNPOD_ACCEPTANCE_FORGEJO_TOKEN=/PRIVATE/PATH/forgejo-api-token
+```
+
+The main acceptance config's Agent image must be the imported current runtime
+(Controller and Agent share that image). The previous image must match the
+previous release binary. The Runner configuration must register a dedicated
+local test Runner, use `spawnpod:spawnpod://<profile image>` and the mounted
+socket `/run/spawnpod/private/backend.sock`. Match Runner timeout to profile
+`maxLifetime`. Forgejo must be the local test instance at `127.0.0.1:3000`; its
+URL in Runner config must also be reachable from the test Pod. The optional
+`forgejo-local-proxy.py` forwards local Forgejo to the K3s node address and
+accepts only that node and its pod CIDR. Stop the proxy after tests.
+
+Run only the container scenario when its requirements are configured:
+
+```sh
+go test -v -count=1 -timeout=20m ./tests/integration/acceptance \
+  -run 'TestLocalClusterAcceptance/BundleUpgradeAndRecovery$'
+```
+
+It starts rc.4, runs a real Forgejo workflow, drains/stops, switches to target,
+runs another workflow, introduces an intentional Controller startup failure,
+restores the entire previous set, runs a workflow, and repeats the target update
+and workflow. Secret identity/resourceVersion/data and old records are checked.
+Credentials and manifests stay in the private evidence directory; never upload
+that entire directory as a CI artifact. Dedicated local Runner registration and
+API token should be removed after manual tests.
+
+`upgrade-ci.sh` automates setup only on a disposable GitHub-hosted runner; it is
+not a workstation/server installer. The release workflow uses it as a gate.

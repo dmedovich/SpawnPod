@@ -26,6 +26,7 @@ import (
 	pb "github.com/dmedovich/spawnpod/internal/adapter/forgejo/proto"
 	"github.com/dmedovich/spawnpod/internal/admission"
 	"github.com/dmedovich/spawnpod/internal/config"
+	"github.com/dmedovich/spawnpod/internal/controller"
 	"github.com/dmedovich/spawnpod/internal/engine"
 	provider "github.com/dmedovich/spawnpod/internal/provider/kubernetes"
 	"github.com/dmedovich/spawnpod/internal/smoke"
@@ -100,6 +101,7 @@ func TestLocalClusterAcceptance(t *testing.T) {
 	c.jobs = &provider.EngineJobs{Provider: p}
 	c.store = &provider.ConfigMapStore{Client: impClient, Namespace: cfg.Kubernetes.Namespace}
 	c.backend = &engine.Engine{Store: c.store, Jobs: c.jobs, Services: &provider.EngineServices{Provider: p}, CleanupTimeout: cleanupDuration(cfg)}
+	t.Run("AdmissionRoundTripDiagnostics", c.admissionRoundTripDiagnostics)
 	t.Run("AdmissionAndRBAC", c.admission)
 	t.Run("NetworkAndGuard", c.network)
 	t.Run("Capacity", c.capacity)
@@ -108,6 +110,7 @@ func TestLocalClusterAcceptance(t *testing.T) {
 	t.Run("RestartStates", c.recovery)
 	t.Run("ConfigMapRetention", c.retention)
 	t.Run("ReleasedControllerUpgradeRollback", c.upgrade)
+	t.Run("BundleUpgradeAndRecovery", c.bundleUpgrade)
 }
 
 func (c *cluster) kubectl(t *testing.T, input []byte, args ...string) []byte {
@@ -783,7 +786,11 @@ func (c *cluster) upgrade(t *testing.T) {
 	}
 	stopRollback()
 	c.setDefaultDenySelector(t, false)
-	t.Log("rc.1 -> current -> rc.1: drained v1/v2 records retained; current package RPC smoke passed")
+	previousVersion, err := exec.Command(c.previous, "version").Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("%s -> current -> %s: drained v1/v2 records retained; current package RPC smoke passed", strings.TrimSpace(string(previousVersion)), strings.TrimSpace(string(previousVersion)))
 }
 
 func (c *cluster) setDefaultDenySelector(t *testing.T, legacy bool) {
@@ -965,4 +972,23 @@ func (c *cluster) crash(t *testing.T) {
 	if _, err := c.admin.CoreV1().Pods(c.cfg.Kubernetes.Namespace).Get(ctx, record.Job.Name, metav1.GetOptions{}); !apierrors.IsNotFound(err) {
 		t.Fatalf("crashed job Pod survived recovery: %v", err)
 	}
+}
+
+// This regression uses objects read back from a real API server, not a fake
+// approximation of defaulting. A stale Agent digest gives a named predicate.
+func (c *cluster) admissionRoundTripDiagnostics(t *testing.T) {
+	ctx := context.Background()
+	if err := controller.Preflight(ctx, c.cfg, c.admin); err != nil {
+		t.Fatalf("render/apply/GET preflight: %v", err)
+	}
+	stale := c.cfg
+	stale.AgentImage = stale.AgentImage[:strings.LastIndex(stale.AgentImage, ":")+1] + strings.Repeat("e", 64)
+	if err := controller.Preflight(ctx, stale, c.admin); err == nil || !strings.Contains(err.Error(), "admission.policy.validations[7].expression") {
+		t.Fatalf("stale Agent diagnostic: %v", err)
+	}
+	var out bytes.Buffer
+	if err := controller.Doctor(ctx, stale, c.admin, &out); err == nil || !strings.Contains(out.String(), "admission.policy.validations[7].expression") {
+		t.Fatalf("doctor/startup mismatch: %v\n%s", err, out.String())
+	}
+	t.Log("API-defaulted admission accepted; stale Agent rejected with exact expression field by both doctor and startup")
 }

@@ -20,7 +20,6 @@ import (
 	provider "github.com/dmedovich/spawnpod/internal/provider/kubernetes"
 	"github.com/dmedovich/spawnpod/internal/telemetry"
 	"github.com/dmedovich/spawnpod/internal/transport/unixrpc"
-	admissionv1 "k8s.io/api/admissionregistration/v1"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -101,15 +100,12 @@ func preflightWorkloadAdmission(ctx context.Context, cfg config.Config, client k
 	if err != nil {
 		return fmt.Errorf("get workload admission policy: %w", err)
 	}
-	if policy.Spec.FailurePolicy == nil || *policy.Spec.FailurePolicy != admissionv1.Fail || policy.Spec.MatchConstraints == nil || !sameResourceRules(policy.Spec.MatchConstraints.ResourceRules, expectedPolicy.Spec.MatchConstraints.ResourceRules) || len(policy.Spec.MatchConstraints.ExcludeResourceRules) != 0 || !emptyLabelSelector(policy.Spec.MatchConstraints.NamespaceSelector) || !emptyLabelSelector(policy.Spec.MatchConstraints.ObjectSelector) || !defaultMatchPolicy(policy.Spec.MatchConstraints.MatchPolicy) || !reflect.DeepEqual(policy.Spec.Validations, expectedPolicy.Spec.Validations) || policy.Spec.ParamKind != nil || len(policy.Spec.MatchConditions) != 0 {
-		return errors.New("installed workload admission policy differs from current profiles")
-	}
 	binding, err := client.AdmissionregistrationV1().ValidatingAdmissionPolicyBindings().Get(ctx, admission.PolicyName, metav1.GetOptions{})
 	if err != nil {
 		return fmt.Errorf("get workload admission binding: %w", err)
 	}
-	if binding.Spec.PolicyName != admission.PolicyName || len(binding.Spec.ValidationActions) != 1 || binding.Spec.ValidationActions[0] != admissionv1.Deny || binding.Spec.ParamRef != nil || binding.Spec.MatchResources == nil || binding.Spec.MatchResources.NamespaceSelector == nil || !reflect.DeepEqual(binding.Spec.MatchResources.NamespaceSelector, expectedBinding.Spec.MatchResources.NamespaceSelector) || !emptyLabelSelector(binding.Spec.MatchResources.ObjectSelector) || !defaultMatchPolicy(binding.Spec.MatchResources.MatchPolicy) || len(binding.Spec.MatchResources.ResourceRules) != 0 || len(binding.Spec.MatchResources.ExcludeResourceRules) != 0 {
-		return errors.New("installed workload admission binding differs from required scope")
+	if err := admission.Compare(policy, expectedPolicy, binding, expectedBinding); err != nil {
+		return err
 	}
 	expectedLimits, err := admission.ContainerLimits(cfg)
 	if err != nil {
@@ -155,32 +151,6 @@ func preflightWorkloadAdmission(ctx context.Context, cfg config.Config, client k
 		}
 	}
 	return nil
-}
-
-// The API server fills these admission match defaults on read. Compare their
-// meaning so an installed manifest still matches the generated one.
-func sameResourceRules(actual, expected []admissionv1.NamedRuleWithOperations) bool {
-	if len(actual) != len(expected) {
-		return false
-	}
-	for i := range actual {
-		rule := actual[i].DeepCopy()
-		if rule.Scope != nil && *rule.Scope == admissionv1.AllScopes {
-			rule.Scope = nil
-		}
-		if !reflect.DeepEqual(*rule, expected[i]) {
-			return false
-		}
-	}
-	return true
-}
-
-func emptyLabelSelector(selector *metav1.LabelSelector) bool {
-	return selector == nil || len(selector.MatchLabels) == 0 && len(selector.MatchExpressions) == 0
-}
-
-func defaultMatchPolicy(policy *admissionv1.MatchPolicyType) bool {
-	return policy == nil || *policy == admissionv1.Equivalent
 }
 
 func validDefaultDeny(policy *networkingv1.NetworkPolicy) bool {

@@ -12,10 +12,9 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/dmedovich/spawnpod/internal/admission"
 	"github.com/dmedovich/spawnpod/internal/config"
 	"github.com/dmedovich/spawnpod/internal/controller"
-	"github.com/dmedovich/spawnpod/internal/deployment"
+	installationmodel "github.com/dmedovich/spawnpod/internal/installation"
 	"github.com/dmedovich/spawnpod/internal/smoke"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
@@ -36,11 +35,14 @@ func run(args []string) error {
 		fmt.Println(version)
 		return nil
 	}
+	if len(args) > 0 && args[0] == "upgrade" {
+		return runUpgrade(args[1:])
+	}
 	if len(args) > 0 && args[0] == "environments" {
 		return runEnvironments(args[1:])
 	}
 	if len(args) == 0 || (args[0] != "serve" && args[0] != "validate" && args[0] != "render-admission" && args[0] != "render-deployment" && args[0] != "doctor" && args[0] != "smoke") {
-		return errors.New("usage: spawnpod <serve|validate|render-admission|render-deployment|doctor|smoke> --config PATH; spawnpod environments <list|inspect|cleanup>; or spawnpod version")
+		return errors.New("usage: spawnpod <serve|validate|render-admission|render-deployment|doctor|smoke> --config PATH; spawnpod environments <list|inspect|cleanup>; spawnpod upgrade <plan|render|check>; or spawnpod version")
 	}
 	flags := flag.NewFlagSet(args[0], flag.ContinueOnError)
 	path := flags.String("config", "", "path to strict YAML configuration")
@@ -49,17 +51,22 @@ func run(args []string) error {
 		controllerImage = flags.String("controller-image", "", "digest-pinned SpawnPod runtime image")
 		runnerImage = flags.String("runner-image", "", "digest-pinned official Forgejo Runner v13.1.0 image")
 	}
-	asController := flags.Bool("as-controller", false, "impersonate the controller ServiceAccount with an admin kubeconfig")
-	strict := flags.Bool("strict", false, "doctor: treat warnings as failures")
-	installation := flags.Bool("installation", false, "doctor: also check Runner Secret, mounted config and infra quota using operator credentials")
+	asController, strict, installation := new(bool), new(bool), new(bool)
+	if args[0] == "doctor" || args[0] == "serve" {
+		asController = flags.Bool("as-controller", false, "impersonate the controller ServiceAccount with an admin kubeconfig")
+	}
+	if args[0] == "doctor" {
+		strict = flags.Bool("strict", false, "treat warnings as failures")
+		installation = flags.Bool("installation", false, "check Runner Secret, mounted config and infra quota using operator credentials")
+	}
 	if err := flags.Parse(args[1:]); err != nil {
 		return err
 	}
-	if *path == "" || flags.NArg() != 0 || (*asController && args[0] != "doctor" && args[0] != "serve") {
-		return errors.New("--config PATH is required; --as-controller is available only for doctor and serve")
+	if *path == "" || flags.NArg() != 0 {
+		return errors.New("--config PATH is required")
 	}
-	if (*strict || *installation) && args[0] != "doctor" || *installation && *asController {
-		return errors.New("--strict and --installation require doctor; --installation uses operator credentials, without --as-controller")
+	if *installation && *asController {
+		return errors.New("--installation uses operator credentials, without --as-controller")
 	}
 	cfg, err := config.Load(*path)
 	if err != nil {
@@ -70,7 +77,7 @@ func run(args []string) error {
 		return nil
 	}
 	if args[0] == "render-deployment" {
-		manifest, err := deployment.Render(cfg, *controllerImage, *runnerImage)
+		manifest, err := installationmodel.RenderDeployment(cfg, *controllerImage, *runnerImage)
 		if err != nil {
 			return err
 		}
@@ -78,7 +85,7 @@ func run(args []string) error {
 		return err
 	}
 	if args[0] == "render-admission" {
-		manifest, err := admission.Render(cfg)
+		manifest, err := installationmodel.RenderAdmission(cfg)
 		if err != nil {
 			return err
 		}
@@ -102,11 +109,18 @@ func run(args []string) error {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+	id := identity(cfg)
 	if args[0] == "doctor" {
+		contextName := "configured credentials"
+		if *asController {
+			contextName = "controller ServiceAccount impersonation"
+		}
+		fmt.Printf("Context: %s; version=%s binary.sha256=%s config.effective.sha256=%s architecture=%s\n", contextName, id.Version, id.BinarySHA256, id.EffectiveConfigSHA256, id.Architecture)
 		checkCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 		defer cancel()
 		return controller.DoctorWithOptions(checkCtx, cfg, client, os.Stdout, controller.DoctorOptions{Strict: *strict, Installation: *installation})
 	}
+	slog.Info("controller.startup", "version", id.Version, "binary_sha256", id.BinarySHA256, "effective_config_sha256", id.EffectiveConfigSHA256, "architecture", id.Architecture, "namespace", cfg.Kubernetes.Namespace, "lease_namespace", cfg.Kubernetes.LeaseNamespace)
 	return controller.Run(ctx, cfg, client, restConfig, slog.Default())
 }
 

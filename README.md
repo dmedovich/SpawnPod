@@ -9,7 +9,7 @@ runs commands, moves workspace files and cleans up Kubernetes resources.
 It is intended for operators who already use Kubernetes and want to decide
 exactly which images, resources and network access their CI jobs may use.
 
-**Status: v0.1.0-rc.5 release candidate.** Linux/amd64 was validated locally
+**Status: v0.1.0-rc.6 release candidate.** Linux/amd64 was validated locally
 with Forgejo Runner on earlier candidates, including private HTTPS checkout.
 Linux/arm64 artifacts have not been tested on target hardware. See the
 [validation results](docs/VALIDATION.md) and
@@ -79,7 +79,7 @@ With automatic selection enabled, Go downloads it if needed. See
 - [Release specification](docs/SPEC.md)
 - [Security model and installation requirements](docs/SECURITY.md)
 - [Validation and local K3s acceptance](docs/VALIDATION.md)
-- [Release process](docs/RELEASE.md) and [candidate release notes](docs/releases/v0.1.0-rc.5.md)
+- [Release process](docs/RELEASE.md) and [candidate release notes](docs/releases/v0.1.0-rc.6.md)
 
 ## Repository
 

@@ -119,3 +119,75 @@ direct plugin RPCs and an existing local agent image; they do not confirm a
 successful workflow in the original Forgejo installation or validate a newly
 published OCI image. Release publication, GitOps rollout and that installation's
 workflow outcomes remain pending.
+
+## rc.6 upgrade development, 2026-10-11
+
+Local platform: amd64, K3s `v1.34.12+k3s1`, official Forgejo Runner
+`v13.1.0`. This is development evidence, not validation of a published rc.6
+artifact or the target server's K3s `v1.36.4+k3s1`.
+
+Confirmed:
+
+- `make check` and `go test -race -short ./...` pass.
+- Real API round trip accepts rendered/defaulted admission. Changing only the
+  expected Agent digest fails at `admission.policy.validations[7].expression`,
+  in both startup preflight and doctor. This reproduces a stale configuration
+  failure, not the original historical incident's unknown cause.
+- Host Controller rc.4 → development → rc.4 retains drained records and passes
+  direct plugin RPC smoke.
+- A full containerized rc.4 installation, using its release binary/OCI image
+  and the official Runner, passes a real Forgejo workflow. A drained switch to
+  the locally built preview passes ready checks and another real workflow.
+- An intentional missing Controller config produces a failed rollout;
+  `upgrade check` rejects it. Restoring old network/admission and the old full
+  ConfigMap/Deployment/Service restores rc.4 and a real Forgejo workflow.
+- Repeating the target update after recovery passes readiness and a fourth
+  real workflow. The full scenario passed twice; the second run also uses the
+  strict Deployment comparison with enumerated API defaults.
+- The Runner Secret's UID, resourceVersion and credential data remain unchanged;
+  previous CI records remain available. Test namespaces are removed and the
+  original admission policy is restored by the acceptance harness.
+
+The first two container smoke attempts exposed a test configuration mismatch:
+Runner requested a 30-minute environment while the profile allowed 10 minutes.
+They failed with `environment timeout exceeds profile limit`. Matching Runner
+`timeout` to profile `maxLifetime` resolved it; the production timeout guard
+remained enabled. Successful local Forgejo runs: 43–50 (two four-job sequences).
+
+Private evidence (ignored by Git): `.local/rc6-validation/`, including
+`cluster-admission-upgrade.log`, `cluster-bundle-first-success.log`,
+`cluster-bundle-final.log`, `check-final.log`, `race-final.log`, workflow logs and
+per-phase manifests. The container test uses preview runtime digest
+`sha256:d028383b861c6599aecf43dc559e125f1afdfcb783dca80e3dc0c65f1dd79e1c`;
+subsequent CLI diagnostics/refinements are covered by source tests and the CI
+bootstrap, which rebuilds runtime from its own checkout. A final release image
+must pass the CI job from its actual source revision.
+
+### RFC acceptance coverage
+
+| RFC test | Evidence |
+| --- | --- |
+| T01, T03 | deterministic bundle and shared runtime dependency tests |
+| T02, T06 | real K3s admission and container ready checks |
+| T04, T05, T14 | stale Agent named predicate; strict full admission specs; shared validator and separate Controller identity |
+| T07 | Recreate quota ownership/usage tests; historical events retained only as evidence |
+| T08–T10 | containerized intentional failure, full restore and repeat update |
+| T11 | local image cache/node architecture blockers; registry platform/authentication remain explicit operator prerequisites |
+| T12 | unchanged live Secret UID/RV/data and retained CI records |
+| T13 | real official Runner/Forgejo workflows before and after switch/recovery |
+| T15 | unrelated files preserved, edited/symlink conflicts rejected, render preview and interrupted-write recovery |
+| T16 | drain gate rejects remaining managed Pods; no mixed-generation admission is generated |
+
+`upgrade-ci.sh` adds the containerized scenario to the GitHub release workflow
+as a prerequisite for publication. Its bootstrap is restricted to disposable
+GitHub-hosted VMs and installs pinned K3s, verifies prior release checksums,
+builds/imports the current runtime and runs real local Forgejo workflows. The
+bootstrap has local syntax/lint checks; its GitHub execution is still pending.
+The local actionlint version also flags the pre-existing `artifact-metadata`
+permission, which the rc.5 release workflow already used successfully.
+
+The original rc.5 startup predicate remains unproved from the supplied healthy
+later snapshots. No claim is made that a particular default or `DeepEqual`
+caused it. New field/hash/binary/config diagnostics allow a future failing
+observation to be distinguished from the passing host context. Automatic apply,
+expanded Agent generations and automatic rollback are not implemented.

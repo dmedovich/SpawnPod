@@ -1,6 +1,6 @@
 # SpawnPod release specification
 
-Version: **v0.1.0-rc.5**. See [architecture](ARCHITECTURE.md) for components
+Version: **v0.1.0-rc.6**. See [architecture](ARCHITECTURE.md) for components
 and [security](SECURITY.md) for syscall restrictions and the trust model.
 
 ## Supported platforms and integration

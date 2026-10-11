@@ -10,7 +10,6 @@ import (
 
 	"github.com/dmedovich/spawnpod/internal/admission"
 	"github.com/dmedovich/spawnpod/internal/config"
-	"github.com/dmedovich/spawnpod/internal/deployment"
 	authorizationv1 "k8s.io/api/authorization/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
@@ -95,13 +94,15 @@ func DoctorWithOptions(ctx context.Context, cfg config.Config, client kubernetes
 	if options.Installation {
 		check("Runner Secret runner.yaml (contents withheld)", doctorRunnerSecret(ctx, cfg, client))
 		check("mounted controller config.yaml", doctorMountedConfig(ctx, cfg, client))
-		quotas, err := client.CoreV1().ResourceQuotas(cfg.Kubernetes.LeaseNamespace).List(ctx, metav1.ListOptions{})
+		capacity, err := InstallationCapacity(ctx, cfg, client)
 		check("installation namespace quotas", err)
-		if err == nil {
-			for i := range quotas.Items {
-				for _, message := range quotaWarnings(&quotas.Items[i], deployment.InstallationBudget()) {
-					warn("installation: " + message)
-				}
+		for _, item := range capacity {
+			message := fmt.Sprintf("quota %s %s: requested=%s used=%s hard=%s available=%s after Recreate=%s", item.Quota, item.Resource, item.Requested, item.Used, item.Hard, item.Available, item.AfterRecreate)
+			if item.Severity == "blocker" {
+				check(message, errors.New("new Pod does not fit even after retiring old installation Pods"))
+			}
+			if item.Severity == "warning" {
+				warn(message + "; Recreate can fit after old Pods are fully removed; temporary quota accounting lag is possible")
 			}
 		}
 	}

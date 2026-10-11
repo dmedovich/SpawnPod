@@ -1,0 +1,272 @@
+package acceptance
+
+import (
+	"bytes"
+	"context"
+	"crypto/sha256"
+	"encoding/json"
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/dmedovich/spawnpod/internal/config"
+	"github.com/dmedovich/spawnpod/internal/installation"
+	yaml "go.yaml.in/yaml/v3"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
+)
+
+// The containerized path is an additional explicit opt-in. Source config must
+// pin the imported current runtime; the previous image must match the previous
+// release binary. It uses registered test Runner credentials without logging them.
+func (c *cluster) bundleUpgrade(t *testing.T) {
+	runnerImage := os.Getenv("SPAWNPOD_ACCEPTANCE_RUNNER_IMAGE")
+	if runnerImage == "" {
+		t.Skip("set SPAWNPOD_ACCEPTANCE_RUNNER_IMAGE, _RUNNER_CONFIG, _FORGEJO_TOKEN and _PREVIOUS_IMAGE for full containerized upgrade")
+	}
+	oldImage := os.Getenv("SPAWNPOD_ACCEPTANCE_PREVIOUS_IMAGE")
+	runnerPath, tokenPath := os.Getenv("SPAWNPOD_ACCEPTANCE_RUNNER_CONFIG"), os.Getenv("SPAWNPOD_ACCEPTANCE_FORGEJO_TOKEN")
+	if oldImage == "" || runnerPath == "" || tokenPath == "" {
+		t.Fatal("incomplete containerized acceptance opt-in")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
+	defer cancel()
+	runnerData, err := os.ReadFile(runnerPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secret, err := c.admin.CoreV1().Secrets(c.cfg.Kubernetes.LeaseNamespace).Create(ctx, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "spawnpod-runner", Namespace: c.cfg.Kubernetes.LeaseNamespace}, Data: map[string][]byte{"runner.yaml": runnerData}}, metav1.CreateOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		pods, e := c.admin.CoreV1().Pods(c.cfg.Kubernetes.LeaseNamespace).List(context.Background(), metav1.ListOptions{})
+		if e != nil {
+			return
+		}
+		for _, p := range pods.Items {
+			for _, container := range []string{"controller", "runner"} {
+				logs, e := c.admin.CoreV1().Pods(p.Namespace).GetLogs(p.Name, &corev1.PodLogOptions{Container: container}).DoRaw(context.Background())
+				if e == nil {
+					_ = os.WriteFile(filepath.Join(c.evidence, "bundle-final-"+container+".log"), logs, 0600)
+				}
+			}
+		}
+	})
+	target, err := installation.Build(c.cfg, "dev", c.cfg.AgentImage, runnerImage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldCfg := c.cfg
+	oldCfg.AgentImage = oldImage
+	oldCfg.Controller.TombstoneRetention = ""
+	oldCfg.Kubernetes.Namespace = "ci"
+	oldCfg.Kubernetes.LeaseNamespace = "infra"
+	cfgData, err := yaml.Marshal(oldCfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldPath := filepath.Join(c.evidence, "previous-reference-config.yaml")
+	if err := os.WriteFile(oldPath, cfgData, 0600); err != nil {
+		t.Fatal(err)
+	}
+	render := exec.Command(c.previous, "render-deployment", "--config", oldPath, "--controller-image", oldImage, "--runner-image", runnerImage)
+	oldDeployment, err := render.Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldCfg.Kubernetes.Namespace = c.cfg.Kubernetes.Namespace
+	oldCfg.Kubernetes.LeaseNamespace = c.cfg.Kubernetes.LeaseNamespace
+	oldPath = filepath.Join(c.evidence, "previous-config.yaml")
+	cfgData, err = yaml.Marshal(oldCfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(oldPath, cfgData, 0600); err != nil {
+		t.Fatal(err)
+	}
+	oldPolicy, err := exec.Command(c.previous, "render-admission", "--config", oldPath).Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	objects, err := installation.DecodeObjects(oldDeployment)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var translated bytes.Buffer
+	var mountedChecksum string
+	for _, o := range objects {
+		o.SetNamespace(c.cfg.Kubernetes.LeaseNamespace)
+		if o.GetKind() == "ConfigMap" {
+			data := o.Object["data"].(map[string]any)
+			mounted, err := config.Decode(strings.NewReader(data["config.yaml"].(string)))
+			if err != nil {
+				t.Fatal(err)
+			}
+			mounted.Kubernetes.Namespace = c.cfg.Kubernetes.Namespace
+			mounted.Kubernetes.LeaseNamespace = c.cfg.Kubernetes.LeaseNamespace
+			mounted.Controller.TombstoneRetention = ""
+			raw, err := yaml.Marshal(mounted)
+			if err != nil {
+				t.Fatal(err)
+			}
+			data["config.yaml"] = string(raw)
+			mountedChecksum = fmt.Sprintf("%x", sha256.Sum256(raw))
+		}
+		if o.GetKind() == "Deployment" {
+			spec := o.Object["spec"].(map[string]any)
+			template := spec["template"].(map[string]any)
+			metadata := template["metadata"].(map[string]any)
+			annotations := metadata["annotations"].(map[string]any)
+			annotations["checksum/config"] = mountedChecksum
+		}
+		raw, err := json.Marshal(o.Object)
+		if err != nil {
+			t.Fatal(err)
+		}
+		translated.Write(raw)
+		translated.WriteString("\n---\n")
+	}
+	oldDeployment = translated.Bytes()
+	oldNetwork := bytes.ReplaceAll(target.Files["10-network.yaml"], []byte("podSelector: {}"), []byte("podSelector:\n    matchLabels:\n      spawnpod.dev/managed: 'true'"))
+	// Use the source version's actual manifests as the rollback snapshot.
+	for name, data := range map[string][]byte{"previous-deployment.yaml": oldDeployment, "previous-admission.yaml": oldPolicy, "previous-network.yaml": oldNetwork} {
+		if err := os.WriteFile(filepath.Join(c.evidence, name), data, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	imp := rest.CopyConfig(c.rest)
+	imp.Impersonate.UserName = "system:serviceaccount:" + c.cfg.Kubernetes.LeaseNamespace + ":spawnpod-controller"
+	imp.Impersonate.Groups = []string{"system:serviceaccounts", "system:serviceaccounts:" + c.cfg.Kubernetes.LeaseNamespace, "system:authenticated"}
+	restricted, err := kubernetes.NewForConfig(imp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	apply := func(data []byte) { c.kubectl(t, data, "apply", "-f", "-") }
+	wait := func(name string, condition func() bool) {
+		t.Helper()
+		deadline := time.Now().Add(3 * time.Minute)
+		for !condition() {
+			if time.Now().After(deadline) {
+				pods, _ := c.admin.CoreV1().Pods(c.cfg.Kubernetes.LeaseNamespace).List(ctx, metav1.ListOptions{})
+				for _, p := range pods.Items {
+					for _, container := range []string{"controller", "runner"} {
+						logs, e := c.admin.CoreV1().Pods(p.Namespace).GetLogs(p.Name, &corev1.PodLogOptions{Container: container}).DoRaw(ctx)
+						if e == nil {
+							_ = os.WriteFile(filepath.Join(c.evidence, name+"-"+container+".log"), logs, 0600)
+						}
+					}
+				}
+				t.Fatalf("timeout waiting for %s", name)
+			}
+			time.Sleep(time.Second)
+		}
+	}
+	ready := func() {
+		c.kubectl(t, nil, "-n", c.cfg.Kubernetes.LeaseNamespace, "rollout", "status", "deployment/spawnpod", "--timeout=180s")
+	}
+	drainAndStop := func() {
+		wait("workload-cleanup", func() bool {
+			pods, e := c.admin.CoreV1().Pods(c.cfg.Kubernetes.Namespace).List(ctx, metav1.ListOptions{LabelSelector: "spawnpod.dev/managed=true"})
+			return e == nil && len(pods.Items) == 0
+		})
+		c.kubectl(t, nil, "-n", c.cfg.Kubernetes.LeaseNamespace, "scale", "deployment/spawnpod", "--replicas=0")
+		wait("installation-stopped", func() bool {
+			pods, e := c.admin.CoreV1().Pods(c.cfg.Kubernetes.LeaseNamespace).List(ctx, metav1.ListOptions{})
+			return e == nil && len(pods.Items) == 0
+		})
+	}
+	smoke := func(label string) {
+		cmd := exec.Command("python3", "../forgejo-workflow.py", "--token-file", tokenPath, "--workflow", "../../../deploy/release/workflow-smoke.yml")
+		out, err := cmd.CombinedOutput()
+		_ = os.WriteFile(filepath.Join(c.evidence, label+"-forgejo.log"), out, 0600)
+		if err != nil {
+			t.Fatalf("Forgejo smoke failed (%s); see private evidence: %v", label, err)
+		}
+	}
+	apply(oldNetwork)
+	apply(oldPolicy)
+	apply(oldDeployment)
+	ready()
+	smoke("previous")
+	recordsBefore, err := c.store.List(ctx)
+	if err != nil || len(recordsBefore) == 0 {
+		t.Fatalf("missing real CI records: %v", err)
+	}
+	drainAndStop()
+	report := target.Check(ctx, c.admin, restricted, "switch")
+	if report.Err() == nil {
+		t.Fatal("stale policy allowed target switch")
+	}
+	apply(target.Files["00-security.yaml"])
+	apply(target.Files["10-network.yaml"])
+	apply(target.Files["20-admission.yaml"])
+	wait("target-preflight", func() bool { return target.Check(ctx, c.admin, restricted, "switch").Err() == nil })
+	// Repeat after a simulated interruption at the dependency gate.
+	apply(target.Files["20-admission.yaml"])
+	apply(target.Files["30-deployment.yaml"])
+	ready()
+	wait("target-ready", func() bool { return target.Check(ctx, c.admin, restricted, "ready").Err() == nil })
+	smoke("target")
+	drainAndStop()
+	apply(target.Files["30-deployment.yaml"])
+	ready()
+	d, err := c.admin.AppsV1().Deployments(c.cfg.Kubernetes.LeaseNamespace).Get(ctx, "spawnpod", metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	d.Spec.Template.Spec.Containers[0].Args = []string{"serve", "--config", "/intentional-missing-config"}
+	if _, err := c.admin.AppsV1().Deployments(d.Namespace).Update(ctx, d, metav1.UpdateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	wait("intentional-failure", func() bool {
+		pods, e := c.admin.CoreV1().Pods(d.Namespace).List(ctx, metav1.ListOptions{})
+		if e != nil {
+			return false
+		}
+		for _, p := range pods.Items {
+			for _, s := range p.Status.ContainerStatuses {
+				if s.Name == "controller" && s.State.Waiting != nil && s.RestartCount > 0 {
+					return true
+				}
+			}
+		}
+		return false
+	})
+	if r := target.Check(ctx, c.admin, restricted, "ready"); r.Err() == nil || r.CIProven {
+		t.Fatal("broken rollout reported success")
+	}
+	drainAndStop()
+	apply(oldNetwork)
+	apply(oldPolicy)
+	apply(oldDeployment)
+	ready()
+	smoke("rollback")
+	restored, err := c.admin.CoreV1().Secrets(secret.Namespace).Get(ctx, secret.Name, metav1.GetOptions{})
+	if err != nil || restored.UID != secret.UID || restored.ResourceVersion != secret.ResourceVersion || !bytes.Equal(restored.Data["runner.yaml"], runnerData) {
+		t.Fatal("Runner Secret changed during upgrade/rollback")
+	}
+	for _, record := range recordsBefore {
+		current, e := c.store.Get(ctx, record.ID)
+		if e != nil || current.ID != record.ID {
+			t.Fatalf("record lost across upgrade: %s %v", record.ID, e)
+		}
+	}
+	drainAndStop()
+	apply(target.Files["10-network.yaml"])
+	apply(target.Files["20-admission.yaml"])
+	wait("retry-preflight", func() bool { return target.Check(ctx, c.admin, restricted, "switch").Err() == nil })
+	apply(target.Files["30-deployment.yaml"])
+	ready()
+	wait("retry-ready", func() bool { return target.Check(ctx, c.admin, restricted, "ready").Err() == nil })
+	smoke("retry")
+	t.Log("containerized previous -> target -> intentional failure -> full rollback -> target; real Forgejo jobs passed; Secret UID/RV and records preserved")
+	// Stop containers before parent cleanup removes namespaces/restores policy.
+	drainAndStop()
+}

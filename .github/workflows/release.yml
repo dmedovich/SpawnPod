@@ -23,9 +23,25 @@ jobs:
       - run: make check
       - run: go test -race -short ./...
       - run: go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...
+  upgrade:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version: '1.27.2'
+      - name: Prepare disposable K3s/Forgejo test dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y podman python3-yaml zstd
+      - name: Verify container upgrade, failure recovery and real Forgejo jobs
+        run: bash tests/integration/upgrade-ci.sh
   release:
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: check
+    needs: [check, upgrade]
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     permissions:

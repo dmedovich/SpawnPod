@@ -321,3 +321,17 @@ func TestRunServesOnlyWhileLeaseHeld(t *testing.T) {
 		t.Fatalf("socket still exists: %v", err)
 	}
 }
+
+func TestStaleAgentDiagnosticSharedWithDoctor(t *testing.T) {
+	cfg := exampleControllerConfig(t)
+	client := preflightClient(t, cfg)
+	cfg.AgentImage = cfg.AgentImage[:strings.LastIndex(cfg.AgentImage, ":")+1] + strings.Repeat("e", 64)
+	err := Preflight(context.Background(), cfg, client)
+	if err == nil || !strings.Contains(err.Error(), "admission.policy.validations[7].expression") {
+		t.Fatalf("missing failed predicate: %v", err)
+	}
+	var output strings.Builder
+	if err := Doctor(context.Background(), cfg, client, &output); err == nil || !strings.Contains(output.String(), "admission.policy.validations[7].expression") {
+		t.Fatalf("doctor/startup diverge: %v %s", err, output.String())
+	}
+}

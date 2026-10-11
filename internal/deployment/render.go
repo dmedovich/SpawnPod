@@ -45,6 +45,11 @@ func InstallationBudget() corev1.ResourceList {
 			budget[corev1.ResourceName(prefix+string(name))] = value
 		}
 	}
+	for _, name := range []corev1.ResourceName{corev1.ResourceCPU, corev1.ResourceMemory, corev1.ResourceEphemeralStorage} {
+		if value, ok := budget[corev1.ResourceName("requests."+string(name))]; ok {
+			budget[name] = value.DeepCopy()
+		}
+	}
 	return budget
 }
 
@@ -54,23 +59,22 @@ func Render(cfg config.Config, controllerImage, runnerImage string) ([]byte, err
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
+	if cfg.Kubernetes.Namespace == cfg.Kubernetes.LeaseNamespace {
+		return nil, errors.New("installation requires separate workload and Controller namespaces")
+	}
 	if !pinned.MatchString(controllerImage) || !pinned.MatchString(runnerImage) {
 		return nil, errors.New("controller and Runner images must be digest-pinned")
 	}
-	if cfg.Kubernetes.Namespace != "ci" || cfg.Kubernetes.LeaseNamespace != "infra" || cfg.Kubernetes.LeaseName != "spawnpod-controller" {
-		return nil, errors.New("installation renderer requires the infra/ci reference RBAC layout")
-	}
-	cfg.Kubernetes.Kubeconfig = ""
-	cfg.Controller.SocketPath = "/run/spawnpod/private/backend.sock"
-	cfg.Controller.MonitorAddress = ":9090"
-	if err := cfg.Validate(); err != nil {
+	var err error
+	cfg, err = config.InstallationConfig(cfg)
+	if err != nil {
 		return nil, err
 	}
 	content, err := yaml.Marshal(cfg)
 	if err != nil {
 		return nil, err
 	}
-	cm := &corev1.ConfigMap{TypeMeta: metav1.TypeMeta{APIVersion: "v1", Kind: "ConfigMap"}, ObjectMeta: metav1.ObjectMeta{Name: "spawnpod-config", Namespace: "infra"}, Data: map[string]string{"config.yaml": string(content)}}
+	cm := &corev1.ConfigMap{TypeMeta: metav1.TypeMeta{APIVersion: "v1", Kind: "ConfigMap"}, ObjectMeta: metav1.ObjectMeta{Name: "spawnpod-config", Namespace: cfg.Kubernetes.LeaseNamespace}, Data: map[string]string{"config.yaml": string(content)}}
 	security := &corev1.SecurityContext{RunAsNonRoot: ptr(true), RunAsUser: ptr(int64(10001)), RunAsGroup: ptr(int64(10001)), ReadOnlyRootFilesystem: ptr(true), AllowPrivilegeEscalation: ptr(false), Capabilities: &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}}, SeccompProfile: &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault}}
 	socketMount := corev1.VolumeMount{Name: "socket", MountPath: "/run/spawnpod"}
 	controller := corev1.Container{Name: "controller", Image: controllerImage, Command: []string{"/spawnpod"}, Args: []string{"serve", "--config", "/etc/spawnpod/config.yaml"}, SecurityContext: security.DeepCopy(), Resources: containerResources(), Ports: []corev1.ContainerPort{{Name: "monitor", ContainerPort: 9090}}, VolumeMounts: []corev1.VolumeMount{socketMount, {Name: "config", MountPath: "/etc/spawnpod", ReadOnly: true}, {Name: "api", MountPath: "/var/run/secrets/kubernetes.io/serviceaccount", ReadOnly: true}, {Name: "controller-tmp", MountPath: "/tmp"}}}
@@ -100,8 +104,8 @@ func Render(cfg config.Config, controllerImage, runnerImage string) ([]byte, err
 	drain, _ := cfg.DrainTimeout()
 	cleanup, _ := cfg.CleanupTimeout()
 	labels := map[string]string{"app.kubernetes.io/name": "spawnpod"}
-	deploy := &appsv1.Deployment{TypeMeta: metav1.TypeMeta{APIVersion: "apps/v1", Kind: "Deployment"}, ObjectMeta: metav1.ObjectMeta{Name: "spawnpod", Namespace: "infra"}, Spec: appsv1.DeploymentSpec{Replicas: ptr(int32(1)), RevisionHistoryLimit: ptr(int32(2)), Strategy: appsv1.DeploymentStrategy{Type: appsv1.RecreateDeploymentStrategyType}, Selector: &metav1.LabelSelector{MatchLabels: labels}, Template: corev1.PodTemplateSpec{ObjectMeta: metav1.ObjectMeta{Labels: labels, Annotations: map[string]string{"prometheus.io/scrape": "true", "prometheus.io/port": "9090", "prometheus.io/path": "/metrics", "checksum/config": fmt.Sprintf("%x", sha256.Sum256(content))}}, Spec: corev1.PodSpec{ServiceAccountName: "spawnpod-controller", AutomountServiceAccountToken: ptr(false), EnableServiceLinks: ptr(false), TerminationGracePeriodSeconds: ptr(int64((drain + cleanup + 20*time.Second) / time.Second)), SecurityContext: &corev1.PodSecurityContext{RunAsNonRoot: ptr(true), RunAsUser: ptr(int64(10001)), RunAsGroup: ptr(int64(10001)), FSGroup: ptr(int64(10001)), SeccompProfile: &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault}}, Containers: []corev1.Container{controller, runner}, Volumes: volumes}}}}
-	service := &corev1.Service{TypeMeta: metav1.TypeMeta{APIVersion: "v1", Kind: "Service"}, ObjectMeta: metav1.ObjectMeta{Name: "spawnpod-monitor", Namespace: "infra"}, Spec: corev1.ServiceSpec{Type: corev1.ServiceTypeClusterIP, Selector: labels, Ports: []corev1.ServicePort{{Name: "monitor", Port: 9090, TargetPort: intstr.FromString("monitor")}}}}
+	deploy := &appsv1.Deployment{TypeMeta: metav1.TypeMeta{APIVersion: "apps/v1", Kind: "Deployment"}, ObjectMeta: metav1.ObjectMeta{Name: "spawnpod", Namespace: cfg.Kubernetes.LeaseNamespace}, Spec: appsv1.DeploymentSpec{Replicas: ptr(int32(1)), RevisionHistoryLimit: ptr(int32(2)), Strategy: appsv1.DeploymentStrategy{Type: appsv1.RecreateDeploymentStrategyType}, Selector: &metav1.LabelSelector{MatchLabels: labels}, Template: corev1.PodTemplateSpec{ObjectMeta: metav1.ObjectMeta{Labels: labels, Annotations: map[string]string{"prometheus.io/scrape": "true", "prometheus.io/port": "9090", "prometheus.io/path": "/metrics", "checksum/config": fmt.Sprintf("%x", sha256.Sum256(content))}}, Spec: corev1.PodSpec{ServiceAccountName: "spawnpod-controller", AutomountServiceAccountToken: ptr(false), EnableServiceLinks: ptr(false), TerminationGracePeriodSeconds: ptr(int64((drain + cleanup + 20*time.Second) / time.Second)), SecurityContext: &corev1.PodSecurityContext{RunAsNonRoot: ptr(true), RunAsUser: ptr(int64(10001)), RunAsGroup: ptr(int64(10001)), FSGroup: ptr(int64(10001)), SeccompProfile: &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault}}, Containers: []corev1.Container{controller, runner}, Volumes: volumes}}}}
+	service := &corev1.Service{TypeMeta: metav1.TypeMeta{APIVersion: "v1", Kind: "Service"}, ObjectMeta: metav1.ObjectMeta{Name: "spawnpod-monitor", Namespace: cfg.Kubernetes.LeaseNamespace}, Spec: corev1.ServiceSpec{Type: corev1.ServiceTypeClusterIP, Selector: labels, Ports: []corev1.ServicePort{{Name: "monitor", Port: 9090, TargetPort: intstr.FromString("monitor")}}}}
 	var out bytes.Buffer
 	fmt.Fprintf(&out, "# Generated installation; %s-second termination budget.\n", strconv.FormatInt(*deploy.Spec.Template.Spec.TerminationGracePeriodSeconds, 10))
 	out.WriteString("# Each container: requests cpu=100m memory=128Mi; limits cpu=1 memory=512Mi.\n# Pod total: requests cpu=200m memory=256Mi; limits cpu=2 memory=1Gi; rollout=Recreate (no surge).\n")
