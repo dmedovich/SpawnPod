@@ -169,7 +169,34 @@ func (c *cluster) bundleUpgrade(t *testing.T) {
 		}
 	}
 	ready := func() {
-		c.kubectl(t, nil, "-n", c.cfg.Kubernetes.LeaseNamespace, "rollout", "status", "deployment/spawnpod", "--timeout=180s")
+		command := exec.Command("kubectl", "--kubeconfig", c.cfg.Kubernetes.Kubeconfig, "--request-timeout=20s", "-n", c.cfg.Kubernetes.LeaseNamespace, "rollout", "status", "deployment/spawnpod", "--timeout=180s")
+		output, err := command.CombinedOutput()
+		if err == nil {
+			return
+		}
+		pods, _ := c.admin.CoreV1().Pods(c.cfg.Kubernetes.LeaseNamespace).List(ctx, metav1.ListOptions{})
+		if pods != nil {
+			for _, pod := range pods.Items {
+				for _, status := range pod.Status.ContainerStatuses {
+					t.Logf("pod %s container %s ready=%v waiting=%v terminated=%v", pod.Name, status.Name, status.Ready, status.State.Waiting, status.State.Terminated)
+				}
+				events, _ := c.admin.CoreV1().Events(pod.Namespace).List(ctx, metav1.ListOptions{FieldSelector: "involvedObject.uid=" + string(pod.UID)})
+				if events != nil {
+					for _, event := range events.Items {
+						if event.Type == "Warning" {
+							t.Logf("pod %s event %s: %s", pod.Name, event.Reason, event.Message)
+						}
+					}
+				}
+				// Controller never receives Runner credentials; keep Runner logs private.
+				tail := int64(20)
+				logs, e := c.admin.CoreV1().Pods(pod.Namespace).GetLogs(pod.Name, &corev1.PodLogOptions{Container: "controller", TailLines: &tail}).DoRaw(ctx)
+				if e == nil {
+					t.Logf("controller diagnostic: %s", logs)
+				}
+			}
+		}
+		t.Fatalf("deployment readiness: %v: %s", err, output)
 	}
 	drainAndStop := func() {
 		wait("workload-cleanup", func() bool {

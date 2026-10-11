@@ -21,12 +21,15 @@ stage=build
 report_failure() {
   local failed_line=$1
   printf '::error title=Upgrade bootstrap failed::Stage %s, script line %s\n' "$stage" "$failed_line"
-  if [[ "$stage" == build && -f "$evidence/build.log" ]]; then
-    python3 - "$evidence/build.log" <<'PY'
+  local public_log=''
+  if [[ "$stage" == build ]]; then public_log="$evidence/build.log"; fi
+  if [[ "$stage" == acceptance ]]; then public_log="$evidence/acceptance.log"; fi
+  if [[ -n "$public_log" && -f "$public_log" ]]; then
+    python3 - "$public_log" <<'PY'
 import pathlib, sys
-message = '\n'.join(pathlib.Path(sys.argv[1]).read_text(errors='replace').splitlines()[-20:])
+message = '\n'.join(pathlib.Path(sys.argv[1]).read_text(errors='replace').splitlines()[-35:])
 message = message.replace('%', '%25').replace('\r', '%0D').replace('\n', '%0A')
-print('::error title=Container build diagnostic::' + message)
+print('::error title=Upgrade test diagnostic::' + message)
 PY
   fi
 }
