@@ -4,11 +4,4 @@ __pycache__/
 *.pyc
 dist/
 /spawnpodsdocs
-/BUG.md
-/bug.md
-/SPAWNPOD-OPERATIONS-QOL-ROADMAP.md
 
-# Private rc.6 working material; historical evidence is not a rollback bundle.
-/SpawnPod-rc6-upgrade-RFC.md
-/spawnpod-rc5-diagnostics.tar.gz
-/spawnpod-rc6-agent-package.tar.gz
