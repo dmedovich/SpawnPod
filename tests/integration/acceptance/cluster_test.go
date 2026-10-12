@@ -111,6 +111,7 @@ func TestLocalClusterAcceptance(t *testing.T) {
 	t.Run("ConfigMapRetention", c.retention)
 	t.Run("ReleasedControllerUpgradeRollback", c.upgrade)
 	t.Run("BundleUpgradeAndRecovery", c.bundleUpgrade)
+	t.Run("SourceRunnerProfiles", c.sourceRunnerProfiles)
 }
 
 func (c *cluster) kubectl(t *testing.T, input []byte, args ...string) []byte {

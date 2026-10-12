@@ -95,7 +95,7 @@ go test -v -count=1 -timeout=20m ./tests/integration/acceptance \
   -run 'TestLocalClusterAcceptance/BundleUpgradeAndRecovery$'
 ```
 
-It starts rc.4, runs a real Forgejo workflow, drains/stops, switches to target,
+It starts rc.6 from that binary's actual rendered bundle, runs a real Forgejo workflow, drains/stops, switches to target,
 runs another workflow, introduces an intentional Controller startup failure,
 restores the entire previous set, runs a workflow, and repeats the target update
 and workflow. Secret identity/resourceVersion/data and old records are checked.
@@ -105,3 +105,73 @@ API token should be removed after manual tests.
 
 `upgrade-ci.sh` automates setup only on a disposable GitHub-hosted runner; it is
 not a workstation/server installer. The release workflow uses it as a gate.
+
+## RC7 network gate
+
+`source-network.py` needs Python/PyYAML, kubectl, a loopback local K3s API, the
+current CLI, and digest-pinned runtime and Node/CA job images. It creates three
+unique Restricted namespaces, runs the actual source proxy Deployment and
+rendered job NetworkPolicies, and removes its owned namespaces even on failure.
+It never changes cluster-wide admission and never exports Secrets or kubeconfig.
+These probe Pods do not establish Runner/Agent acceptance.
+
+```sh
+python3 tests/integration/source-network.py \
+  --kubeconfig /PRIVATE/PATH/kubeconfig \
+  --spawnpod-binary /PATH/spawnpod \
+  --runtime-image 'REGISTRY/spawnpod@sha256:RUNTIME_DIGEST' \
+  --job-image 'REGISTRY/node-job@sha256:JOB_DIGEST' \
+  --upstream-host git.dmedovich.com --upstream-ip VERIFIED_PUBLIC_IPV4 \
+  --evidence-dir /PRIVATE/NEW/DIRECTORY
+```
+
+The upstream must serve a CA-trusted HTTPS Forgejo `/api/v1/version` response.
+The default test mode is `pod-selector`; `--policy-mode ip` explicitly tests the
+legacy IPBlock contract. `--diagnose-dnat` may add a temporary exact backend-IP
+rule after a failure, but always fails that run; diagnostic success cannot pass
+acceptance. Selector mode also replaces the proxy Pod and verifies the unchanged
+Service address. Review `summary.json`, `results.json`, `proxy-replacement.json`
+and `cleanup.json`. This gate rejects non-loopback APIs; the target-server checks
+in the runbook must be performed separately.
+
+`build-preview-runtime.sh` builds three static binaries and the release scratch
+image. `oci-preview-registry.py` serves one verified OCI archive read-only on
+loopback for a single-node K3s pull. These are local preview helpers, not a
+release publication or a production registry. Stop the registry after tests.
+
+`SourceRunnerProfiles` is a separate explicit opt-in acceptance subtest. Configure
+isolated `default`, a `source` profile, services disabled, a free reserved Service
+IP on port 3128, and `sourceProxyPolicy: pod-selector`. Supply the same Runner
+image/config/token variables as bundle acceptance, but use both plugin aliases
+from `deploy/release/runner-source.example.yaml`. Also set
+`SPAWNPOD_SOURCE_UPSTREAM_HOST` and `SPAWNPOD_SOURCE_UPSTREAM_IP` to an explicitly
+verified public Forgejo route. Set `SPAWNPOD_SOURCE_FORGEJO_ORIGIN` to
+`http://<literal-local-node-InternalIP>:3001/`, served by the existing local
+Forgejo forwarding fixture. The Node/Git/CA job image must be pinned and cached.
+Run:
+
+```sh
+go test -v -count=1 -timeout=15m ./tests/integration/acceptance \
+  -run 'TestLocalClusterAcceptance/SourceRunnerProfiles$'
+```
+
+This uses real Controller, Agent and official Runner containers, dispatches both
+labels, checks effective proxy env and positive/negative network behavior inside
+jobs, and verifies persisted selected profiles. A test-only HTTPS sidecar on
+proxy loopback supplies a disposable CA and forwards to the local private Forgejo;
+only this fixture receives an extra exact node-IP:3001 proxy egress rule. Production
+public-route isolation is established separately by `source-network.py`.
+The Runner executes pinned `actions/checkout`, checks commit/origin/shallow history,
+and pushes/pulls a small ready-made OCI artifact with verified blob/manifest digests.
+A separate disposable user owns the `write:package` token, which is delivered only
+to that step through a unique Actions secret. Package, secret, token and user are
+removed afterwards, and their absence is checked. The test then starts another
+source workflow, waits for a persisted executing command, requests cancellation
+through Forgejo v15's origin-protected web UI, and checks the cleaned record and
+absent job Pod. A temporary repository writer is used for that UI action and
+removed afterwards. On timeout/interruption the helper requests cancellation
+before credential cleanup. No credential enters a rendered bundle or generated workflow.
+It temporarily changes the global
+admission policy and restores it during parent cleanup, like other acceptance
+tests. Runner logs and registration remain private; remove dedicated temporary
+Runner/API credentials after manual validation.

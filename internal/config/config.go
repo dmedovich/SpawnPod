@@ -18,16 +18,18 @@ import (
 	provider "github.com/dmedovich/spawnpod/internal/provider/kubernetes"
 	yaml "go.yaml.in/yaml/v3"
 	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 )
 
 type Config struct {
-	Version     int                `yaml:"version"`
-	Kubernetes  Kubernetes         `yaml:"kubernetes"`
-	Controller  Controller         `yaml:"controller"`
-	AgentImage  string             `yaml:"agentImage"`
-	SourceProxy string             `yaml:"sourceProxy"`
-	Profiles    map[string]Profile `yaml:"profiles"`
+	Version           int                `yaml:"version"`
+	Kubernetes        Kubernetes         `yaml:"kubernetes"`
+	Controller        Controller         `yaml:"controller"`
+	AgentImage        string             `yaml:"agentImage"`
+	SourceProxy       string             `yaml:"sourceProxy"`
+	SourceProxyPolicy string             `yaml:"sourceProxyPolicy,omitempty"`
+	Profiles          map[string]Profile `yaml:"profiles"`
 }
 
 type Kubernetes struct {
@@ -171,10 +173,10 @@ func (c Config) Validate() error {
 		}
 	}
 	if sourceEnabled {
-		if _, _, err := c.SourceProxyEndpoint(); err != nil {
+		if _, err := c.SourceProxyNetworkPolicy(); err != nil {
 			return err
 		}
-	} else if c.SourceProxy != "" {
+	} else if c.SourceProxy != "" || c.SourceProxyPolicy != "" {
 		return errors.New("sourceProxy requires a source profile")
 	}
 	if err := c.Kubernetes.Quota.Validate(c.Profiles); err != nil {
@@ -208,6 +210,27 @@ func (c Config) Validate() error {
 		}
 	}
 	return nil
+}
+
+// SourceProxyNetworkPolicy preserves the legacy exact-IP mode. The explicit
+// pod-selector mode supports CNI policy evaluation after Service DNAT and grants
+// only the fixed proxy identity in the operator-owned Lease namespace.
+func (c Config) SourceProxyNetworkPolicy() (*networkingv1.NetworkPolicy, error) {
+	ip, port, err := c.SourceProxyEndpoint()
+	if err != nil {
+		return nil, err
+	}
+	switch c.SourceProxyPolicy {
+	case "", "ip":
+		return provider.BuildSourceProxyPolicy(ip, port)
+	case "pod-selector":
+		if c.Kubernetes.LeaseNamespace == c.Kubernetes.Namespace {
+			return nil, errors.New("pod-selector source proxy requires a separate operator-owned Lease namespace")
+		}
+		return provider.BuildSourceProxyWorkloadPolicy(c.Kubernetes.LeaseNamespace, port)
+	default:
+		return nil, errors.New("sourceProxyPolicy must be ip or pod-selector")
+	}
 }
 
 // Hard returns the exact ResourceQuota keys installed for the workload

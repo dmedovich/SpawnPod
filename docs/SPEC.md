@@ -1,6 +1,6 @@
 # SpawnPod release specification
 
-Version: **v0.1.0-rc.6**. See [architecture](ARCHITECTURE.md) for components
+Version: **v0.1.0-rc.7**. See [architecture](ARCHITECTURE.md) for components
 and [security](SECURITY.md) for syscall restrictions and the trust model.
 
 ## Supported platforms and integration
@@ -129,8 +129,17 @@ Execution Pods receive no Kubernetes API token, host mounts, Secret volumes
 or PodSpec environment secrets. Command secrets travel in execution request
 bodies. Restrictive admission, RBAC and NetworkPolicies are installation
 requirements. A source profile injects proxy settings into commands and
-clears NO_PROXY; the external proxy pins the destination IP/port and checks
+clears both NO_PROXY variants; the operator proxy pins the destination IP/port and checks
 HTTPS SNI. The Runner host's action download is a separate network path.
+
+Job egress defaults to the configured exact proxy IP/port. The explicit
+`sourceProxyPolicy: pod-selector` mode instead selects only the configured
+infrastructure namespace AND both fixed proxy Pod labels, on that port, to
+support Service DNAT. It permits reaching those proxy Pods directly as well.
+The infrastructure namespace must differ from the workload namespace and be
+controlled by the operator. Default jobs remain isolated. Services are disabled
+in the RC7 source acceptance configuration. See [SOURCE-PROXY.md](SOURCE-PROXY.md)
+for operator assets, route constraints and exact Runner plugin aliases.
 
 Job Pods share the node kernel. NetworkPolicy cannot stop a malicious job
 from sending its secrets to an otherwise approved source host. The source

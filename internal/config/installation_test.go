@@ -12,6 +12,9 @@ func TestInstallationNormalizesDefaultsWithoutChangingSource(t *testing.T) {
 	}
 	cfg.Kubernetes.Kubeconfig = "/private/operator-config"
 	cfg.Controller.TombstoneRetention = ""
+	profile := cfg.Profiles["default"]
+	profile.Network = ""
+	cfg.Profiles["default"] = profile
 	baseline, err := InstallationBytes(cfg)
 	if err != nil {
 		t.Fatal(err)

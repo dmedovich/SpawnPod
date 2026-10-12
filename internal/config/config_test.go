@@ -110,7 +110,8 @@ func TestServiceProfileValidation(t *testing.T) {
 }
 
 func TestSourceProfileRequiresPinnedProxy(t *testing.T) {
-	base := strings.Replace(example(t), "profiles:\n  default:\n", "sourceProxy: http://10.42.0.1:3128\nprofiles:\n  default:\n    network: source\n", 1)
+	base := strings.Replace(example(t), "profiles:\n", "sourceProxy: http://10.42.0.1:3128\nprofiles:\n", 1)
+	base = strings.Replace(base, "network: isolated", "network: source", 1)
 	cfg, err := Decode(strings.NewReader(base))
 	if err != nil {
 		t.Fatal(err)
@@ -127,6 +128,37 @@ func TestSourceProfileRequiresPinnedProxy(t *testing.T) {
 	} {
 		if _, err := Decode(strings.NewReader(content)); err == nil {
 			t.Fatal("invalid source configuration accepted")
+		}
+	}
+}
+
+func TestSourceProxyPolicyModes(t *testing.T) {
+	base := strings.Replace(example(t), "profiles:\n", "sourceProxy: http://10.43.0.50:3128\nprofiles:\n", 1)
+	base = strings.Replace(base, "network: isolated", "network: source", 1)
+	for _, mode := range []string{"ip", "pod-selector"} {
+		cfg, err := Decode(strings.NewReader("sourceProxyPolicy: " + mode + "\n" + base))
+		if err != nil {
+			t.Fatal(err)
+		}
+		policy, err := cfg.SourceProxyNetworkPolicy()
+		if err != nil {
+			t.Fatal(err)
+		}
+		peer := policy.Spec.Egress[0].To[0]
+		if mode == "ip" && (peer.IPBlock == nil || peer.PodSelector != nil) {
+			t.Fatal("IP mode changed")
+		}
+		if mode == "pod-selector" && (peer.IPBlock != nil || peer.NamespaceSelector == nil || peer.PodSelector == nil || peer.NamespaceSelector.MatchLabels["kubernetes.io/metadata.name"] != cfg.Kubernetes.LeaseNamespace) {
+			t.Fatal("proxy namespace identity missing")
+		}
+	}
+	for _, content := range []string{
+		"sourceProxyPolicy: any\n" + base,
+		"sourceProxyPolicy: pod-selector\n" + example(t),
+		"sourceProxyPolicy: pod-selector\n" + strings.Replace(base, "leaseNamespace: infra", "leaseNamespace: ci", 1),
+	} {
+		if _, err := Decode(strings.NewReader(content)); err == nil {
+			t.Fatal("unsafe source policy accepted")
 		}
 	}
 }

@@ -9,6 +9,7 @@ import (
 	networkingv1 "k8s.io/api/networking/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
+	"k8s.io/apimachinery/pkg/util/validation"
 )
 
 const DefaultDenyPolicyName = "spawnpod-default-deny"
@@ -24,6 +25,22 @@ func BuildSourceProxyPolicy(ip netip.Addr, port int32) (*networkingv1.NetworkPol
 	if ip.Is6() {
 		bits = 128
 	}
+	return sourceProxyPolicy(networkingv1.NetworkPolicyPeer{IPBlock: &networkingv1.IPBlock{CIDR: netip.PrefixFrom(ip, bits).String()}}, port), nil
+}
+
+// BuildSourceProxyWorkloadPolicy identifies the operator-owned proxy after
+// Service DNAT. Both selectors belong to one peer (AND), never separate peers.
+func BuildSourceProxyWorkloadPolicy(namespace string, port int32) (*networkingv1.NetworkPolicy, error) {
+	if namespace == "" || len(validation.IsDNS1123Label(namespace)) != 0 || port < 1 || port > 65535 {
+		return nil, errors.New("invalid source proxy workload endpoint")
+	}
+	return sourceProxyPolicy(networkingv1.NetworkPolicyPeer{
+		NamespaceSelector: &metav1.LabelSelector{MatchLabels: map[string]string{"kubernetes.io/metadata.name": namespace}},
+		PodSelector:       &metav1.LabelSelector{MatchLabels: map[string]string{"app.kubernetes.io/name": "spawnpod-source-proxy", "spawnpod.dev/component": "source-proxy"}},
+	}, port), nil
+}
+
+func sourceProxyPolicy(peer networkingv1.NetworkPolicyPeer, port int32) *networkingv1.NetworkPolicy {
 	protocol := corev1.ProtocolTCP
 	value := intstr.FromInt32(port)
 	return &networkingv1.NetworkPolicy{
@@ -32,9 +49,9 @@ func BuildSourceProxyPolicy(ip netip.Addr, port int32) (*networkingv1.NetworkPol
 		Spec: networkingv1.NetworkPolicySpec{
 			PodSelector: metav1.LabelSelector{MatchLabels: map[string]string{ownerLabel: "true", networkLabel: "source"}},
 			PolicyTypes: []networkingv1.PolicyType{networkingv1.PolicyTypeEgress},
-			Egress:      []networkingv1.NetworkPolicyEgressRule{{To: []networkingv1.NetworkPolicyPeer{{IPBlock: &networkingv1.IPBlock{CIDR: netip.PrefixFrom(ip, bits).String()}}}, Ports: []networkingv1.NetworkPolicyPort{{Protocol: &protocol, Port: &value}}}},
+			Egress:      []networkingv1.NetworkPolicyEgressRule{{To: []networkingv1.NetworkPolicyPeer{peer}, Ports: []networkingv1.NetworkPolicyPort{{Protocol: &protocol, Port: &value}}}},
 		},
-	}, nil
+	}
 }
 
 func servicePolicyNames(environmentID, serviceName string) (string, string) {

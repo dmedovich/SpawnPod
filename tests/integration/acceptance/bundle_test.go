@@ -3,9 +3,6 @@ package acceptance
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/json"
-	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -13,7 +10,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dmedovich/spawnpod/internal/config"
 	"github.com/dmedovich/spawnpod/internal/installation"
 	yaml "go.yaml.in/yaml/v3"
 	corev1 "k8s.io/api/core/v1"
@@ -66,81 +62,37 @@ func (c *cluster) bundleUpgrade(t *testing.T) {
 	oldCfg := c.cfg
 	oldCfg.AgentImage = oldImage
 	oldCfg.Controller.TombstoneRetention = ""
-	oldCfg.Kubernetes.Namespace = "ci"
-	oldCfg.Kubernetes.LeaseNamespace = "infra"
+	// RC6 provides the coordinated renderer; preserve its actual complete bundle.
+	// Do not manufacture a legacy policy or rewrite mounted configuration.
 	cfgData, err := yaml.Marshal(oldCfg)
 	if err != nil {
 		t.Fatal(err)
 	}
-	oldPath := filepath.Join(c.evidence, "previous-reference-config.yaml")
+	oldPath := filepath.Join(c.evidence, "previous-config.yaml")
 	if err := os.WriteFile(oldPath, cfgData, 0600); err != nil {
 		t.Fatal(err)
 	}
-	render := exec.Command(c.previous, "render-deployment", "--config", oldPath, "--controller-image", oldImage, "--runner-image", runnerImage)
-	oldDeployment, err := render.Output()
+	previousVersion, err := exec.Command(c.previous, "version").Output()
 	if err != nil {
 		t.Fatal(err)
 	}
-	oldCfg.Kubernetes.Namespace = c.cfg.Kubernetes.Namespace
-	oldCfg.Kubernetes.LeaseNamespace = c.cfg.Kubernetes.LeaseNamespace
-	oldPath = filepath.Join(c.evidence, "previous-config.yaml")
-	cfgData, err = yaml.Marshal(oldCfg)
-	if err != nil {
-		t.Fatal(err)
+	oldDirectory := filepath.Join(c.evidence, "previous-bundle")
+	render := exec.Command(c.previous, "upgrade", "render", "--config", oldPath, "--target", strings.TrimSpace(string(previousVersion)), "--image", oldImage, "--runner-image", runnerImage, "--output-dir", oldDirectory)
+	if out, err := render.CombinedOutput(); err != nil {
+		t.Fatalf("previous bundle render: %v: %s", err, out)
 	}
-	if err := os.WriteFile(oldPath, cfgData, 0600); err != nil {
-		t.Fatal(err)
-	}
-	oldPolicy, err := exec.Command(c.previous, "render-admission", "--config", oldPath).Output()
-	if err != nil {
-		t.Fatal(err)
-	}
-	objects, err := installation.DecodeObjects(oldDeployment)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var translated bytes.Buffer
-	var mountedChecksum string
-	for _, o := range objects {
-		o.SetNamespace(c.cfg.Kubernetes.LeaseNamespace)
-		if o.GetKind() == "ConfigMap" {
-			data := o.Object["data"].(map[string]any)
-			mounted, err := config.Decode(strings.NewReader(data["config.yaml"].(string)))
-			if err != nil {
-				t.Fatal(err)
-			}
-			mounted.Kubernetes.Namespace = c.cfg.Kubernetes.Namespace
-			mounted.Kubernetes.LeaseNamespace = c.cfg.Kubernetes.LeaseNamespace
-			mounted.Controller.TombstoneRetention = ""
-			raw, err := yaml.Marshal(mounted)
-			if err != nil {
-				t.Fatal(err)
-			}
-			data["config.yaml"] = string(raw)
-			mountedChecksum = fmt.Sprintf("%x", sha256.Sum256(raw))
-		}
-		if o.GetKind() == "Deployment" {
-			spec := o.Object["spec"].(map[string]any)
-			template := spec["template"].(map[string]any)
-			metadata := template["metadata"].(map[string]any)
-			annotations := metadata["annotations"].(map[string]any)
-			annotations["checksum/config"] = mountedChecksum
-		}
-		raw, err := json.Marshal(o.Object)
+	readPrevious := func(name string) []byte {
+		t.Helper()
+		data, err := os.ReadFile(filepath.Join(oldDirectory, name))
 		if err != nil {
 			t.Fatal(err)
 		}
-		translated.Write(raw)
-		translated.WriteString("\n---\n")
+		return data
 	}
-	oldDeployment = translated.Bytes()
-	oldNetwork := bytes.ReplaceAll(target.Files["10-network.yaml"], []byte("podSelector: {}"), []byte("podSelector:\n    matchLabels:\n      spawnpod.dev/managed: 'true'"))
-	// Use the source version's actual manifests as the rollback snapshot.
-	for name, data := range map[string][]byte{"previous-deployment.yaml": oldDeployment, "previous-admission.yaml": oldPolicy, "previous-network.yaml": oldNetwork} {
-		if err := os.WriteFile(filepath.Join(c.evidence, name), data, 0600); err != nil {
-			t.Fatal(err)
-		}
-	}
+	oldSecurity := readPrevious("00-security.yaml")
+	oldNetwork := readPrevious("10-network.yaml")
+	oldPolicy := readPrevious("20-admission.yaml")
+	oldDeployment := readPrevious("30-deployment.yaml")
 	imp := rest.CopyConfig(c.rest)
 	imp.Impersonate.UserName = "system:serviceaccount:" + c.cfg.Kubernetes.LeaseNamespace + ":spawnpod-controller"
 	imp.Impersonate.Groups = []string{"system:serviceaccounts", "system:serviceaccounts:" + c.cfg.Kubernetes.LeaseNamespace, "system:authenticated"}
@@ -205,7 +157,7 @@ func (c *cluster) bundleUpgrade(t *testing.T) {
 		})
 		c.kubectl(t, nil, "-n", c.cfg.Kubernetes.LeaseNamespace, "scale", "deployment/spawnpod", "--replicas=0")
 		wait("installation-stopped", func() bool {
-			pods, e := c.admin.CoreV1().Pods(c.cfg.Kubernetes.LeaseNamespace).List(ctx, metav1.ListOptions{})
+			pods, e := c.admin.CoreV1().Pods(c.cfg.Kubernetes.LeaseNamespace).List(ctx, metav1.ListOptions{LabelSelector: "app.kubernetes.io/name=spawnpod"})
 			return e == nil && len(pods.Items) == 0
 		})
 	}
@@ -217,6 +169,7 @@ func (c *cluster) bundleUpgrade(t *testing.T) {
 			t.Fatalf("Forgejo smoke failed (%s); see private evidence: %v", label, err)
 		}
 	}
+	apply(oldSecurity)
 	apply(oldNetwork)
 	apply(oldPolicy)
 	apply(oldDeployment)
@@ -270,6 +223,7 @@ func (c *cluster) bundleUpgrade(t *testing.T) {
 		t.Fatal("broken rollout reported success")
 	}
 	drainAndStop()
+	apply(oldSecurity)
 	apply(oldNetwork)
 	apply(oldPolicy)
 	apply(oldDeployment)

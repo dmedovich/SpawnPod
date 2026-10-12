@@ -191,3 +191,63 @@ later snapshots. No claim is made that a particular default or `DeepEqual`
 caused it. New field/hash/binary/config diagnostics allow a future failing
 observation to be distinguished from the passing host context. Automatic apply,
 expanded Agent generations and automatic rollback are not implemented.
+
+
+## RC7 local acceptance, 2026-10-12
+
+RC7 adds controlled source networking while keeping the default profile isolated.
+`make check`, the full short race suite and govulncheck v1.8.0 passed. Source and
+all three Linux/amd64 RC7 preview binaries reported no vulnerabilities found.
+Proxy tests cover connection/idle/tunnel bounds, shutdown, malformed TLS/SNI/ECH,
+headers, route addresses and a real ten-second incomplete ClientHello timeout.
+An earlier ten-second fuzz run executed 182907 inputs without failure.
+
+The independent live network gate passed 39 assertions on Fedora 43 /
+K3s v1.34.12+k3s1, amd64, with the actual scratch proxy and rendered policies.
+It checks verified HTTPS, host/port/SNI denials, direct upstream/API/DNS/other
+Pod denial, isolated/unmanaged/foreign namespace denial, proxy egress, partial
+label spoofing and proxy Pod replacement under a stable Service IP. Each denial
+with an available local positive control is preceded by that control. Metadata
+probes have no reachable metadata positive control on this host.
+
+An exact ClusterIP IPBlock failed after local Service DNAT. An exact backend-IP
+diagnostic restored HTTPS but deliberately failed acceptance. The implemented
+explicit selector mode combines infrastructure namespace AND both fixed proxy
+labels on one port, retaining the Service IP in proxy env. It also allows direct
+access to those selected proxy Pods. The legacy exact-IP mode remains default.
+
+Official Runner v13.1.0 executed both labels in `SourceRunnerProfiles` on a fresh
+RC7 preview image (159s total). Persisted records confirm default/source selection;
+job assertions verify all enforced proxy env values and cleared NO_PROXY values.
+Pinned actions/checkout fetched the private Forgejo repository and checked exact
+commit, shallow history and origin. The native Node OCI fixture pushed and pulled
+a small ready-made artifact, checked both blob and manifest hashes, denied an
+unauthenticated write, and failed with an unavailable proxy. Package version,
+unique Actions secret, scoped write:package token and separate package owner
+were removed; absence of credentials/owner was verified independently.
+
+Checkout/OCI use a disposable test CA and loopback TLS frontend in the proxy Pod,
+with a test-only exact local-node:3001 egress exception. This is separate from the
+production public-only route/boundary network gate. No fixture private key enters
+an exported installation bundle or job. The extra source cancellation workflow
+is cancelled only after the controller persists an executing command. Forgejo's
+web UI accepts the request; the test verifies a cleaned record and absent job Pod.
+Its temporary repository writer is removed and absence verified.
+
+The RC6 → RC7 preview → intentional startup failure → complete RC6 rollback →
+RC7 preview gate passed in 298s with four real successful Forgejo jobs. Runner
+Secret UID/resourceVersion/data and environment records were preserved, original
+cluster admission restored and disposable namespaces removed. The previous
+fixture used the saved checksummed RC6 release binaries, packaged locally; this
+does not establish RC6 published OCI signature verification.
+
+Local dirty-preview amd64/arm64 archives passed release checksums, binary versions,
+ELF architectures and release metadata checks. A clean rebuild and published
+signature/attestation checks remain required. Actionlint v1.7.7 does not recognize
+the existing `artifact-metadata` permission, documented by current GitHub workflow
+syntax; all remaining checks passed with only that specific schema diagnostic
+excluded. The changed GitHub release workflow has not run yet.
+
+The operator will test Fedora 44 / K3s v1.36.4 after release. No ARM64 execution,
+target CNI, production capacity, builder or GitOps delivery claim follows from
+these local results. Private `.local` evidence and credentials must not be uploaded.

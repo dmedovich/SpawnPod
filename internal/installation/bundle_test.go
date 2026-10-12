@@ -138,3 +138,65 @@ func TestInstallationRequiresSeparateNamespaces(t *testing.T) {
 		t.Fatal("Controller would be subject to workload admission/default deny")
 	}
 }
+
+func sourceBundle(t *testing.T, namespace string, mode ...string) *Bundle {
+	t.Helper()
+	cfg := example(t).Config
+	cfg.Kubernetes.Namespace = namespace
+	cfg.SourceProxy = "http://10.43.0.50:3128"
+	if len(mode) != 0 {
+		cfg.SourceProxyPolicy = mode[0]
+	}
+	p := cfg.Profiles["default"]
+	p.Network = "source"
+	cfg.Profiles["source"] = p
+	b, err := Build(cfg, "v0.1.0-rc.7", cfg.AgentImage, cfg.AgentImage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
+}
+
+func TestSourcePolicyBundleNamespaceAndOwnership(t *testing.T) {
+	for _, tc := range []struct{ namespace, mode string }{{"ci", "ip"}, {"build-jobs", "ip"}, {"ci", "pod-selector"}, {"build-jobs", "pod-selector"}} {
+		t.Run(tc.namespace+"/"+tc.mode, func(t *testing.T) {
+			namespace := tc.namespace
+			b := sourceBundle(t, namespace, tc.mode)
+			count := 0
+			for _, item := range b.Index.Inventory {
+				if item.Kind == "NetworkPolicy" && item.Name == "spawnpod-source-proxy" {
+					count++
+					if item.Namespace != namespace || item.File != "20-admission.yaml" || item.Phase != "POLICY" {
+						t.Fatalf("incorrect source policy inventory: %+v", item)
+					}
+				}
+			}
+			if count != 1 {
+				t.Fatalf("expected one source policy, found %d", count)
+			}
+			objects, err := DecodeObjects(b.Files["20-admission.yaml"])
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, obj := range objects {
+				if obj.GetKind() == "NetworkPolicy" && obj.GetNamespace() != namespace {
+					t.Fatalf("policy YAML namespace: %q", obj.GetNamespace())
+				}
+			}
+			again, err := Build(b.Config, b.Index.Target, b.Config.AgentImage, b.Config.AgentImage)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for name, data := range b.Files {
+				if !bytes.Equal(data, again.Files[name]) {
+					t.Fatalf("non deterministic source bundle: %s", name)
+				}
+			}
+		})
+	}
+	for _, item := range example(t).Index.Inventory {
+		if item.Kind == "NetworkPolicy" && item.Name != "spawnpod-default-deny" {
+			t.Fatalf("isolated bundle permits egress: %+v", item)
+		}
+	}
+}

@@ -98,6 +98,37 @@ func TestPreflightChecksNamespacesAndAccess(t *testing.T) {
 	}
 }
 
+func TestPreflightSourcePolicyRejectsPeerBroadening(t *testing.T) {
+	for _, mode := range []string{"ip", "pod-selector"} {
+		t.Run(mode, func(t *testing.T) {
+			cfg := exampleControllerConfig(t)
+			profile := cfg.Profiles["default"]
+			profile.Network = "source"
+			cfg.Profiles["default"] = profile
+			cfg.SourceProxy, cfg.SourceProxyPolicy = "http://10.43.0.50:3128", mode
+			client := preflightClient(t, cfg)
+			policy, err := cfg.SourceProxyNetworkPolicy()
+			if err != nil {
+				t.Fatal(err)
+			}
+			policy.Namespace = cfg.Kubernetes.Namespace
+			if _, err := client.NetworkingV1().NetworkPolicies(policy.Namespace).Create(context.Background(), policy, metav1.CreateOptions{}); err != nil {
+				t.Fatal(err)
+			}
+			if err := Preflight(context.Background(), cfg, client); err != nil {
+				t.Fatal(err)
+			}
+			policy.Spec.Egress[0].To = []networkingv1.NetworkPolicyPeer{{}}
+			if _, err := client.NetworkingV1().NetworkPolicies(policy.Namespace).Update(context.Background(), policy, metav1.UpdateOptions{}); err != nil {
+				t.Fatal(err)
+			}
+			if err := Preflight(context.Background(), cfg, client); err == nil || !strings.Contains(err.Error(), "source proxy NetworkPolicy differs") {
+				t.Fatalf("widened peer accepted: %v", err)
+			}
+		})
+	}
+}
+
 func TestPreflightAlwaysRequiresDefaultDeny(t *testing.T) {
 	cfg := exampleControllerConfig(t)
 	client := preflightClient(t, cfg)

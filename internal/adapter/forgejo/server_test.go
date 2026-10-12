@@ -22,12 +22,13 @@ import (
 const testID = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 
 type fakeBackend struct {
-	created   engine.CreateRequest
-	creates   int
-	events    []supervisor.Event
-	execErr   error
-	removeErr error
-	copiedIn  strings.Builder
+	created     engine.CreateRequest
+	creates     int
+	events      []supervisor.Event
+	execErr     error
+	removeErr   error
+	copiedIn    strings.Builder
+	lastCommand supervisor.Request
 }
 
 func (f *fakeBackend) Create(_ context.Context, req engine.CreateRequest) (engine.Record, error) {
@@ -42,6 +43,7 @@ func (f *fakeBackend) Metadata(context.Context, string) (engine.RuntimeMetadata,
 	return engine.RuntimeMetadata{OS: "Linux", Arch: "amd64", Environment: map[string]string{"PATH": "/bin"}}, nil
 }
 func (f *fakeBackend) Exec(_ context.Context, _ string, req supervisor.Request, emit func(supervisor.Event) error) (engine.Record, error) {
+	f.lastCommand = req
 	if req.Op != "run" || req.ID == "" || req.Dir != rootPath || req.TimeoutMillis != (30*time.Minute).Milliseconds() {
 		return engine.Record{}, errors.New("bad supervisor request")
 	}
@@ -62,10 +64,45 @@ func (f *fakeBackend) CopyOut(_ context.Context, _ string, _ string, output io.W
 	return err
 }
 
-type fakeRecords struct{}
+type fakeRecords struct{ profile string }
 
-func (fakeRecords) Get(context.Context, string) (engine.Record, error) {
-	return engine.Record{ID: testID, Profile: "default"}, nil
+func (r fakeRecords) Get(context.Context, string) (engine.Record, error) {
+	profile := r.profile
+	if profile == "" {
+		profile = "default"
+	}
+	return engine.Record{ID: testID, Profile: profile}, nil
+}
+
+func TestSourceExecEnforcesOperatorProxyWithoutMutatingWorkflowEnv(t *testing.T) {
+	_, backend, cfg := server(t)
+	p := cfg.Profiles["default"]
+	p.Network = "source"
+	cfg.Profiles["source"] = p
+	cfg.SourceProxy = "http://10.43.0.50:3128"
+	s, err := New(backend, fakeRecords{profile: "source"}, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	zero := 0
+	backend.events = []supervisor.Event{{ExitCode: &zero}}
+	env := map[string]string{"HTTP_PROXY": "http://evil.invalid", "http_proxy": "http://evil.invalid", "HTTPS_PROXY": "http://evil.invalid", "https_proxy": "http://evil.invalid", "NO_PROXY": "*", "no_proxy": "*", "SCOPED_TOKEN": "private"}
+	if err := s.Exec(&pb.ExecRequest{EnvironmentId: testID, Command: []string{"true"}, Env: env}, &fakeStream[pb.ExecOutput]{}); err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"HTTP_PROXY", "http_proxy", "HTTPS_PROXY", "https_proxy"} {
+		if backend.lastCommand.Env[key] != cfg.SourceProxy || env[key] != "http://evil.invalid" {
+			t.Fatalf("proxy override failed or input mutated for %s", key)
+		}
+	}
+	for _, key := range []string{"NO_PROXY", "no_proxy"} {
+		if backend.lastCommand.Env[key] != "" || env[key] != "*" {
+			t.Fatalf("bypass env retained or input mutated for %s", key)
+		}
+	}
+	if backend.lastCommand.Env["SCOPED_TOKEN"] != "private" {
+		t.Fatal("unrelated command env lost")
+	}
 }
 
 type fakeStream[T any] struct {

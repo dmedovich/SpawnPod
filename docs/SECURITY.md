@@ -67,6 +67,21 @@ separate network path.
 A permitted destination can receive secrets sent by a malicious job. Network
 allowlists do not prevent exfiltration to approved hosts.
 
+HTTPS tunnels allow any application method, including registry writes. Scope
+tokens independently of the destination allowlist. Jobs can overwrite their own
+process environment; NetworkPolicy is the enforcement layer against direct
+bypass. Policies are additive, so required-policy validation alone cannot prove
+the absence of another broad allow rule. Review the complete policy set and
+verify actual packet denials on the target CNI. Operator-approved per-environment
+services are explicit additional connections when services are enabled.
+
+For Kubernetes proxies behind Service DNAT, explicit `sourceProxyPolicy:
+pod-selector` grants the configured TCP port only to the two fixed proxy labels
+in the exact operator-owned Lease namespace. The Service IP stays pinned in
+proxy env; direct access to these same backend Pods is also allowed. Restrict
+Pod creation/relabeling in that namespace to trusted operators. Default `ip`
+mode retains the exact-IP rule and requires verification on the actual CNI.
+
 ## Recovery and upgrades
 
 Environment records contain management state. The store accepts record versions

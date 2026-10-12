@@ -72,11 +72,7 @@ func Preflight(ctx context.Context, cfg config.Config, client kubernetes.Interfa
 		return errors.New("spawnPod default-deny NetworkPolicy differs from required policy")
 	}
 	if cfg.SourceProxy != "" {
-		ip, port, err := cfg.SourceProxyEndpoint()
-		if err != nil {
-			return err
-		}
-		expected, err := provider.BuildSourceProxyPolicy(ip, port)
+		expected, err := cfg.SourceProxyNetworkPolicy()
 		if err != nil {
 			return err
 		}

@@ -22,6 +22,9 @@ func InstallationConfig(source Config) (Config, error) {
 		return Config{}, err
 	}
 	c.Kubernetes.Kubeconfig = ""
+	if c.SourceProxy != "" && c.SourceProxyPolicy == "" {
+		c.SourceProxyPolicy = "ip"
+	}
 	c.Controller.SocketPath = "/run/spawnpod/private/backend.sock"
 	c.Controller.MonitorAddress = ":9090"
 	interval, _ := c.ReconcileInterval()

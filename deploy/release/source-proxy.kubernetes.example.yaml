@@ -1,0 +1,147 @@
+# Operator-owned example, not generated installation output.
+# Replace the runtime digest, reserved ClusterIP and verified upstream IP before use.
+# Use sourceProxyPolicy: pod-selector for post-DNAT CNI enforcement; verify locally.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: spawnpod-source-proxy
+  namespace: infra
+automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: spawnpod-source-proxy-routes-v1
+  namespace: infra
+immutable: true
+data:
+  config.yaml: |
+    listen: 0.0.0.0:3128
+    maxConnections: 128
+    routes:
+      - host: git.dmedovich.com
+        port: 443
+        address: 138.124.231.231 # RFC observation; verify before deployment.
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: spawnpod-source-proxy-boundary
+  namespace: infra
+spec:
+  podSelector:
+    matchLabels:
+      spawnpod.dev/component: source-proxy
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ci
+          podSelector:
+            matchLabels:
+              spawnpod.dev/managed: "true"
+              spawnpod.dev/network: source
+      ports:
+        - protocol: TCP
+          port: 3128
+  egress:
+    - to:
+        - ipBlock:
+            cidr: 138.124.231.231/32
+      ports:
+        - protocol: TCP
+          port: 443
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: spawnpod-source-proxy
+  namespace: infra
+spec:
+  type: ClusterIP
+  clusterIP: 10.43.0.50 # Reserve a free address in the actual Service CIDR.
+  selector:
+    app.kubernetes.io/name: spawnpod-source-proxy
+    spawnpod.dev/component: source-proxy
+  ports:
+    - name: proxy
+      port: 3128
+      targetPort: proxy
+      protocol: TCP
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: spawnpod-source-proxy
+  namespace: infra
+spec:
+  replicas: 1
+  revisionHistoryLimit: 2
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: spawnpod-source-proxy
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: spawnpod-source-proxy
+        spawnpod.dev/component: source-proxy
+    spec:
+      serviceAccountName: spawnpod-source-proxy
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      terminationGracePeriodSeconds: 15
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: proxy
+          image: registry.example.com/spawnpod@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+          imagePullPolicy: IfNotPresent
+          command: [/spawnpod-source-proxy]
+          args: [--config, /etc/spawnpod-source-proxy/config.yaml]
+          ports:
+            - name: proxy
+              containerPort: 3128
+              protocol: TCP
+          securityContext:
+            runAsNonRoot: true
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+          resources:
+            requests:
+              cpu: 50m
+              memory: 32Mi
+            limits:
+              cpu: 500m
+              memory: 128Mi
+          startupProbe:
+            tcpSocket:
+              port: proxy
+            periodSeconds: 2
+            failureThreshold: 15
+          readinessProbe:
+            tcpSocket:
+              port: proxy
+            periodSeconds: 5
+          livenessProbe:
+            tcpSocket:
+              port: proxy
+            periodSeconds: 10
+            failureThreshold: 3
+          volumeMounts:
+            - name: routes
+              mountPath: /etc/spawnpod-source-proxy
+              readOnly: true
+      volumes:
+        - name: routes
+          configMap:
+            name: spawnpod-source-proxy-routes-v1
+            defaultMode: 0444

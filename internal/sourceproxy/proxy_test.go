@@ -125,6 +125,7 @@ func TestCONNECTRejectsDifferentSNI(t *testing.T) {
 	defer func() { _ = upstream.Close() }()
 	upstreamResult := make(chan error, 1)
 	go func() {
+		_ = upstream.(*net.TCPListener).SetDeadline(time.Now().Add(500 * time.Millisecond))
 		connection, err := upstream.Accept()
 		if err != nil {
 			upstreamResult <- err
@@ -164,8 +165,9 @@ func TestCONNECTRejectsDifferentSNI(t *testing.T) {
 	if _, err := reader.Read(one[:]); err != io.EOF {
 		t.Fatalf("client tunnel did not close: %v", err)
 	}
-	if err := <-upstreamResult; !errors.Is(err, io.EOF) {
-		t.Fatalf("upstream received data or stayed open: %v", err)
+	var networkErr net.Error
+	if err := <-upstreamResult; !errors.As(err, &networkErr) || !networkErr.Timeout() {
+		t.Fatalf("mismatched SNI opened upstream connection: %v", err)
 	}
 }
 

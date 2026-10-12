@@ -32,6 +32,7 @@ controller:
 agentImage: registry.example.com/spawnpod-agent@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 profiles:
   default:
+    network: isolated
     image: registry.example.com/ci-base@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
     architecture: amd64
     uid: 10001

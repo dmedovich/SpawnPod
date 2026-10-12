@@ -138,6 +138,11 @@ release includes a route config example; a source profile fails preflight
 unless the exact corresponding egress policy is installed. This candidate
 does not deploy the proxy automatically or grant arbitrary DNS/internet access.
 
+The RC7 work-in-progress [source proxy runbook](SOURCE-PROXY.md) describes the
+standalone Kubernetes example, connection limits, route rotation and the pending
+Runner/CNI acceptance gates. Its examples require operator-specific values and
+live verification before use.
+
 ## Verify the installation
 
 ```sh

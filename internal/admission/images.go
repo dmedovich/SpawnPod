@@ -10,7 +10,6 @@ import (
 	"strings"
 
 	"github.com/dmedovich/spawnpod/internal/config"
-	provider "github.com/dmedovich/spawnpod/internal/provider/kubernetes"
 	admissionv1 "k8s.io/api/admissionregistration/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -197,14 +196,11 @@ func Render(cfg config.Config) ([]byte, error) {
 	manifest = append(manifest, []byte("---\n")...)
 	manifest = append(manifest, fourth...)
 	if cfg.SourceProxy != "" {
-		ip, port, err := cfg.SourceProxyEndpoint()
+		policy, err := cfg.SourceProxyNetworkPolicy()
 		if err != nil {
 			return nil, err
 		}
-		policy, err := provider.BuildSourceProxyPolicy(ip, port)
-		if err != nil {
-			return nil, err
-		}
+		policy.Namespace = cfg.Kubernetes.Namespace
 		encoded, err := marshalManifest(policy)
 		if err != nil {
 			return nil, err

@@ -182,3 +182,58 @@ func TestUnexpectedDeploymentSecurityFieldsBlockReadiness(t *testing.T) {
 		}
 	}
 }
+
+func TestSourcePolicyUpgradeGates(t *testing.T) {
+	ctx := context.Background()
+	for _, tc := range []struct{ namespace, mode string }{{"ci", "ip"}, {"build-jobs", "ip"}, {"ci", "pod-selector"}, {"build-jobs", "pod-selector"}} {
+		t.Run(tc.namespace+"/"+tc.mode, func(t *testing.T) {
+			namespace := tc.namespace
+			b := sourceBundle(t, namespace, tc.mode)
+			c := installed(t, b)
+			if r := b.Check(ctx, c, c, "ready"); r.Err() != nil {
+				t.Fatalf("source readiness failed: %+v", r.Findings)
+			}
+			dep, err := c.AppsV1().Deployments("infra").Get(ctx, "spawnpod", metav1.GetOptions{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			zero := int32(0)
+			dep.Spec.Replicas = &zero
+			dep.Status = appsv1.DeploymentStatus{ObservedGeneration: 1}
+			if _, err := c.AppsV1().Deployments("infra").Update(ctx, dep, metav1.UpdateOptions{}); err != nil {
+				t.Fatal(err)
+			}
+			if err := c.CoreV1().Pods("infra").Delete(ctx, "installation", metav1.DeleteOptions{}); err != nil {
+				t.Fatal(err)
+			}
+			if r := b.Check(ctx, c, c, "switch"); r.Err() != nil {
+				t.Fatalf("source switch failed: %+v", r.Findings)
+			}
+			policy, err := c.NetworkingV1().NetworkPolicies(namespace).Get(ctx, "spawnpod-source-proxy", metav1.GetOptions{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tc.mode == "ip" {
+				policy.Spec.Egress[0].To[0].IPBlock.CIDR = "0.0.0.0/0"
+			} else {
+				policy.Spec.Egress[0].To[0].NamespaceSelector.MatchLabels = nil
+			}
+			if _, err := c.NetworkingV1().NetworkPolicies(namespace).Update(ctx, policy, metav1.UpdateOptions{}); err != nil {
+				t.Fatal(err)
+			}
+			if r := b.Check(ctx, c, c, "switch"); r.Err() == nil {
+				t.Fatal("broadened source policy accepted")
+			}
+			if err := c.NetworkingV1().NetworkPolicies(namespace).Delete(ctx, policy.Name, metav1.DeleteOptions{}); err != nil {
+				t.Fatal(err)
+			}
+			policy.Namespace = "default"
+			if _, err := c.NetworkingV1().NetworkPolicies("default").Create(ctx, policy, metav1.CreateOptions{}); err != nil {
+				t.Fatal(err)
+			}
+			if r := b.Check(ctx, c, c, "switch"); r.Err() == nil {
+				t.Fatal("source policy in wrong namespace accepted")
+			}
+		})
+	}
+}

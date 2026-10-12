@@ -1,10 +1,69 @@
 package kubernetes
 
 import (
+	"net/netip"
+	"reflect"
 	"testing"
 
+	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
+
+func TestSourceWorkloadPolicyRequiresCombinedIdentity(t *testing.T) {
+	policy, err := BuildSourceProxyWorkloadPolicy("proxy-infra", 3128)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expected, _ := BuildSourceProxyPolicy(netip.MustParseAddr("10.43.0.50"), 3128)
+	expected.Spec.Egress[0].To = []networkingv1.NetworkPolicyPeer{{
+		NamespaceSelector: &metav1.LabelSelector{MatchLabels: map[string]string{"kubernetes.io/metadata.name": "proxy-infra"}},
+		PodSelector:       &metav1.LabelSelector{MatchLabels: map[string]string{"app.kubernetes.io/name": "spawnpod-source-proxy", "spawnpod.dev/component": "source-proxy"}},
+	}}
+	if !reflect.DeepEqual(policy.Spec, expected.Spec) {
+		t.Fatalf("proxy identity or port broadened: %+v", policy.Spec)
+	}
+	for _, tc := range []struct {
+		namespace string
+		port      int32
+	}{{"", 3128}, {"infra,ci", 3128}, {"infra", 0}, {"infra", 65536}} {
+		if _, err := BuildSourceProxyWorkloadPolicy(tc.namespace, tc.port); err == nil {
+			t.Fatalf("invalid workload endpoint accepted: %+v", tc)
+		}
+	}
+}
+
+func TestSourcePolicyPinsEndpointAndSelectsOnlySourceJobs(t *testing.T) {
+	for _, address := range []string{"10.43.0.50", "2001:db8::50"} {
+		ip := netip.MustParseAddr(address)
+		policy, err := BuildSourceProxyPolicy(ip, 3128)
+		if err != nil {
+			t.Fatal(err)
+		}
+		spec := policy.Spec
+		if policy.Name != SourceProxyPolicyName || len(spec.PodSelector.MatchLabels) != 2 || spec.PodSelector.MatchLabels[ownerLabel] != "true" || spec.PodSelector.MatchLabels[networkLabel] != "source" || len(spec.PodSelector.MatchExpressions) != 0 {
+			t.Fatal("source policy selects unapproved workloads")
+		}
+		if len(spec.PolicyTypes) != 1 || spec.PolicyTypes[0] != networkingv1.PolicyTypeEgress || len(spec.Ingress) != 0 || len(spec.Egress) != 1 {
+			t.Fatal("unexpected source policy directions")
+		}
+		rule := spec.Egress[0]
+		if len(rule.To) != 1 || rule.To[0].IPBlock == nil || rule.To[0].PodSelector != nil || rule.To[0].NamespaceSelector != nil || rule.To[0].IPBlock.CIDR != netip.PrefixFrom(ip, ip.BitLen()).String() || len(rule.To[0].IPBlock.Except) != 0 {
+			t.Fatal("source policy broadens endpoint")
+		}
+		if len(rule.Ports) != 1 || rule.Ports[0].Port == nil || rule.Ports[0].Port.IntVal != 3128 || rule.Ports[0].EndPort != nil || rule.Ports[0].Protocol == nil || *rule.Ports[0].Protocol != corev1.ProtocolTCP {
+			t.Fatal("source policy broadens port/protocol")
+		}
+	}
+	for _, tc := range []struct {
+		ip   netip.Addr
+		port int32
+	}{{netip.Addr{}, 3128}, {netip.MustParseAddr("127.0.0.1"), 3128}, {netip.MustParseAddr("224.0.0.1"), 3128}, {netip.MustParseAddr("10.43.0.50"), 0}, {netip.MustParseAddr("10.43.0.50"), 65536}} {
+		if _, err := BuildSourceProxyPolicy(tc.ip, tc.port); err == nil {
+			t.Fatalf("invalid proxy endpoint accepted: %+v", tc)
+		}
+	}
+}
 
 func TestServicePoliciesSelectOnlyMatchingJobAndService(t *testing.T) {
 	spec := validServiceSpec()

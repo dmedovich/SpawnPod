@@ -11,8 +11,10 @@ evidence="$repo_root/.local/upgrade-ci"
 mkdir -p "$evidence/runtime"
 chmod 700 "$repo_root/.local" "$evidence"
 umask 077
-previous_version=v0.1.0-rc.4
+previous_version=v0.1.0-rc.6
 k3s_version=v1.34.12+k3s1
+source_upstream_host=${SPAWNPOD_SOURCE_UPSTREAM_HOST:-git.dmedovich.com}
+source_upstream_ip=${SPAWNPOD_SOURCE_UPSTREAM_IP:-138.124.231.231}
 runner_image=data.forgejo.org/forgejo/runner@sha256:96af81b1b0cd928f3f135fb8dc021d47cff868c151a4fd28af971e892990ee7a
 forgejo_image=codeberg.org/forgejo/forgejo@sha256:91a5310c86934339e16bd06b6078aada836e3d8935b2d70f6598108cbfaed5d1
 stage=build
@@ -24,6 +26,7 @@ report_failure() {
   local public_log=''
   if [[ "$stage" == build ]]; then public_log="$evidence/build.log"; fi
   if [[ "$stage" == acceptance ]]; then public_log="$evidence/acceptance.log"; fi
+  if [[ "$stage" == source-runner ]]; then public_log="$evidence/source-acceptance.log"; fi
   if [[ -n "$public_log" && -f "$public_log" ]]; then
     python3 - "$public_log" <<'PY'
 import pathlib, sys
@@ -93,6 +96,13 @@ PY
 previous_image=$(cat "$evidence/IMAGE_DIGEST")
 sudo k3s ctr -n k8s.io images tag "localhost/spawnpod:$previous_version" "$previous_image"
 
+stage=source-network
+python3 tests/integration/source-network.py \
+  --kubeconfig "$evidence/kubeconfig" --spawnpod-binary "$evidence/runtime/spawnpod" \
+  --runtime-image "$(cat "$evidence/runtime-image")" --job-image "$(cat "$evidence/job-image")" \
+  --upstream-host "$source_upstream_host" --upstream-ip "$source_upstream_ip" \
+  --evidence-dir "$evidence/source-network"
+
 # Existing admission is required by the acceptance suite so it can restore it.
 stage=baseline-admission
 kubectl apply -f deploy/security.yaml
@@ -147,3 +157,28 @@ export SPAWNPOD_ACCEPTANCE_FORGEJO_TOKEN="$evidence/forgejo-api-token"
 stage=acceptance
 go test -v -count=1 -timeout=20m ./tests/integration/acceptance \
   -run 'TestLocalClusterAcceptance/(AdmissionRoundTripDiagnostics|BundleUpgradeAndRecovery)$' | tee "$evidence/acceptance.log"
+
+stage=source-runner
+python3 - "$evidence" <<'PY'
+import pathlib, sys, yaml
+p = pathlib.Path(sys.argv[1])
+cfg = yaml.safe_load((p/'config.yaml').read_text())
+cfg['kubernetes'].update(namespace='sp-acceptance-ci-source', leaseNamespace='sp-acceptance-infra-source')
+cfg['profiles']['default']['network'] = 'isolated'
+cfg['profiles']['source'] = dict(cfg['profiles']['default'], network='source')
+cfg['sourceProxy'] = 'http://10.43.0.71:3128'
+cfg['sourceProxyPolicy'] = 'pod-selector'
+(p/'source-config.yaml').write_text(yaml.safe_dump(cfg, sort_keys=False))
+runner = yaml.safe_load((p/'runner.yaml').read_text())
+runner['runner']['labels'].append('spawnpod-source:spawnpod-source://'+cfg['profiles']['source']['image'])
+runner['plugins']['spawnpod']['options'] = dict(profile='default')
+runner['plugins']['spawnpod-source'] = dict(address='unix:///run/spawnpod/private/backend.sock', options=dict(profile='source'))
+(p/'source-runner.yaml').write_text(yaml.safe_dump(runner, sort_keys=False))
+PY
+export SPAWNPOD_ACCEPTANCE_CONFIG="$evidence/source-config.yaml"
+export SPAWNPOD_ACCEPTANCE_RUNNER_CONFIG="$evidence/source-runner.yaml"
+export SPAWNPOD_SOURCE_UPSTREAM_HOST="$source_upstream_host"
+export SPAWNPOD_SOURCE_UPSTREAM_IP="$source_upstream_ip"
+export SPAWNPOD_SOURCE_FORGEJO_ORIGIN="http://$node_address:3001/"
+go test -v -count=1 -timeout=15m ./tests/integration/acceptance \
+  -run 'TestLocalClusterAcceptance/SourceRunnerProfiles$' | tee "$evidence/source-acceptance.log"
